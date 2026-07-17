@@ -16,7 +16,11 @@ const dbMocks = {
   releasePublishLock: vi.fn(),
   setPageRichMenuId: vi.fn(),
   markRichMenuGroupPublished: vi.fn(),
+  duplicateRichMenuGroup: vi.fn(),
+  addRichMenuOperationLog: vi.fn(),
+  getRichMenuOperationLogs: vi.fn(),
   getLineAccountById: vi.fn(),
+  getFriendById: vi.fn(),
 };
 vi.mock('@line-crm/db', () => dbMocks);
 
@@ -500,5 +504,50 @@ describe('POST /api/rich-menu-groups/:groupId/publish', () => {
     const res = await app.request('/api/rich-menu-groups/gid12345-aaaa/publish', { method: 'POST' });
     expect(res.status).toBe(500);
     expect(dbMocks.releasePublishLock).toHaveBeenCalledWith(expect.anything(), 'gid12345-aaaa');
+  });
+});
+
+describe('rich-menu safety endpoints', () => {
+  test('duplicate creates a draft copy and records a JSON snapshot', async () => {
+    const source = {
+      id: 'g1', account_id: 'acc-1', name: '卸メニュー', chat_bar_text: 'メニュー',
+      size: 'compact', default_page_id: 'p1', is_default_for_all: 0,
+      status: 'draft', publishing_at: null, created_at: '', updated_at: '',
+      pages: [],
+    };
+    const copied = { ...source, id: 'g2', name: '卸メニュー 4分割' };
+    dbMocks.getRichMenuGroupWithPages.mockResolvedValue(source);
+    dbMocks.duplicateRichMenuGroup.mockResolvedValue(copied);
+    dbMocks.addRichMenuOperationLog.mockResolvedValue(undefined);
+    const app = setupApp();
+    const res = await app.request('/api/rich-menu-groups/g1/duplicate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '卸メニュー 4分割' }),
+    });
+    expect(res.status).toBe(200);
+    expect(dbMocks.duplicateRichMenuGroup).toHaveBeenCalledWith(expect.anything(), source, '卸メニュー 4分割');
+    expect(dbMocks.addRichMenuOperationLog).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ operation: 'duplicate_draft', status: 'success' }),
+    );
+  });
+
+  test('global publication rejects stale confirmation values before LINE access', async () => {
+    dbMocks.getRichMenuGroupWithPages.mockResolvedValue({
+      id: 'g1', account_id: 'acc-1', name: '卸メニュー', chat_bar_text: 'メニュー',
+      size: 'compact', default_page_id: 'p1', is_default_for_all: 0,
+      status: 'published', publishing_at: null, created_at: '', updated_at: '',
+      pages: [{
+        id: 'p1', group_id: 'g1', order_index: 0, name: 'main', alias_id: 'a',
+        line_richmenu_id: 'richmenu-new', image_r2_key: null, image_content_type: null,
+        created_at: '', updated_at: '', areas: [],
+      }],
+    });
+    const app = setupApp();
+    const res = await app.request('/api/rich-menu-groups/g1/set-default', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: 'acc-1', menuName: 'wrong', richMenuId: 'richmenu-new' }),
+    });
+    expect(res.status).toBe(409);
+    expect(dbMocks.getLineAccountById).not.toHaveBeenCalled();
   });
 });

@@ -357,3 +357,25 @@ curl -X POST ".../api/automations" \
 - Worker APIルート: `apps/worker/src/routes/rich-menus.ts`
 - SDK リソース: `packages/sdk/src/resources/rich-menus.ts`
 - SDK 型定義: `packages/sdk/src/types.ts` (RichMenu, RichMenuArea, RichMenuAction, CreateRichMenuInput)
+
+## 安全な公開フロー
+
+管理画面エディタはD1に下書き、画像、領域、LINE側richMenuIdを保存する。
+LINE Official Account Managerで作成されたメニューはMessaging APIから取得・編集できないため、
+Manager側メニューはフォールバックとして別管理し、API側で上書き・削除しない。
+
+操作は必ず次の順序で分離する。
+
+1. 下書き保存・画像アップロード
+2. `POST /api/rich-menu-groups/:groupId/publish` でLINE APIへ登録
+   - サーバー側で `isDefaultForAll=false` を強制し、この操作だけでは表示しない
+3. `POST /api/rich-menu-groups/:groupId/apply-test-user` でテストユーザー1名へ適用
+4. ownerが確認値を送信した場合のみ `POST /api/rich-menu-groups/:groupId/set-default`
+5. 復旧時は `POST /api/rich-menu-groups/:groupId/clear-default`
+   - Messaging API側の全員デフォルトだけを解除し、APIメニュー本体とaliasは残す
+   - Manager側デフォルトメニューが再表示される
+
+`unpublish` はAPIメニュー本体とaliasを削除する別の危険操作であり、
+`clear-default` の代用にしない。複製はD1下書きだけを作り、画像とLINE側IDをコピーしない。
+
+操作結果、変更前後JSON、richMenuId、エラーは `rich_menu_operation_logs` に保存する。

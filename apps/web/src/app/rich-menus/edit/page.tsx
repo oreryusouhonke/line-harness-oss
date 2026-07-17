@@ -96,6 +96,14 @@ function Editor({
   const [unpublishing, setUnpublishing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [imageVersion, setImageVersion] = useState(0)
+  const [history, setHistory] = useState<Array<{
+    id: string
+    operation: string
+    status: 'success' | 'error'
+    richMenuId: string | null
+    errorMessage: string | null
+    createdAt: string
+  }>>([])
 
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -115,6 +123,8 @@ function Editor({
         prev && g.pages.some((p) => p.id === prev) ? prev : (g.pages[0]?.id ?? null),
       )
       setSelectedAreaId(null)
+      const historyRes = await api.richMenuGroups.history(groupId)
+      if (historyRes.success) setHistory(historyRes.data)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -273,8 +283,13 @@ function Editor({
   }
 
   async function handleUnpublish() {
+    const richMenuId = group?.pages.find((p) => p.id === group.defaultPageId)?.lineRichmenuId
+      ?? group?.pages[0]?.lineRichmenuId
+      ?? '(未登録)'
     if (!confirm(
-      'このリッチメニューを LINE から取り下げます。\n\n' +
+      `対象アカウント: ${group?.accountId}\nメニュー名: ${group?.name}\nrichMenuId: ${richMenuId}\n\n` +
+        '現在の設定: LINE API登録済み\n新しい設定: APIメニュー本体とaliasを削除\n\n' +
+        'このリッチメニューを LINE から取り下げます。\n\n' +
         '・LINE 公式アカウント上のメニュー登録 (alias / richmenu) をすべて削除\n' +
         '・現在このメニューを見ている友だちのトーク画面からも消えます\n\n' +
         '取り下げ後はもう一度「LINE に登録」すれば再公開できます。\n\n続行しますか？',
@@ -295,6 +310,67 @@ function Editor({
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setUnpublishing(false)
+    }
+  }
+
+  async function handleApplyTestUser() {
+    const friendId = prompt('テストする友だち1名のラインハーネス内 friend IDを入力してください。')
+    if (!friendId?.trim()) return
+    if (!confirm(`対象: ${friendId.trim()}\n\nこの1名だけに適用します。全ユーザー設定は変更しません。`)) return
+    setBusy(true)
+    try {
+      const res = await api.richMenuGroups.applyTestUser(groupId, friendId.trim())
+      if (!res.success) throw new Error(res.error ?? 'テスト適用失敗')
+      alert(`テストユーザー1名へ適用しました。\nrichMenuId: ${res.data.richMenuId}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleSetDefault() {
+    if (!group) return
+    const page = group.pages.find((p) => p.id === group.defaultPageId) ?? group.pages[0]
+    if (!page?.lineRichmenuId) {
+      alert('先に「LINE APIへ登録」を実行してください。')
+      return
+    }
+    const current = JSON.stringify({ isDefaultForAll: group.isDefaultForAll }, null, 2)
+    const next = JSON.stringify({ isDefaultForAll: true, richMenuId: page.lineRichmenuId }, null, 2)
+    if (!confirm(
+      `【全ユーザーへ公開】\n対象アカウント: ${group.accountId}\nメニュー名: ${group.name}\nrichMenuId: ${page.lineRichmenuId}\n\n現在の設定:\n${current}\n\n新しい設定:\n${next}\n\n本当に公開しますか？`,
+    )) return
+    setBusy(true)
+    try {
+      const res = await api.richMenuGroups.setDefault(groupId, {
+        accountId: group.accountId,
+        menuName: group.name,
+        richMenuId: page.lineRichmenuId,
+      })
+      if (!res.success) throw new Error(res.error ?? '全ユーザー公開失敗')
+      await reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleClearDefault() {
+    if (!group) return
+    if (!confirm(
+      `対象アカウント: ${group.accountId}\nメニュー名: ${group.name}\n\nMessaging API側の全ユーザー設定だけを解除します。APIメニュー本体は削除しません。解除後はOfficial Account Manager側のメニューがフォールバック表示されます。`,
+    )) return
+    setBusy(true)
+    try {
+      const res = await api.richMenuGroups.clearDefault(groupId)
+      if (!res.success) throw new Error(res.error ?? '全ユーザー設定解除失敗')
+      await reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -406,8 +482,8 @@ function Editor({
               {publishing
                 ? 'LINE 登録中...'
                 : group.status === 'published'
-                  ? 'LINE に再登録'
-                  : 'LINE に登録'}
+                  ? 'LINE APIへ再登録'
+                  : 'LINE APIへ登録'}
             </button>
           </div>
         }
@@ -424,6 +500,26 @@ function Editor({
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded mb-4">
           {error}
         </div>
+      )}
+
+      {group.status === 'published' && (
+        <section className="mb-5 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h2 className="text-sm font-semibold text-blue-900 mb-1">表示対象を設定</h2>
+          <p className="text-xs text-blue-800 mb-3">
+            LINE APIへの登録だけでは誰にも表示されません。テスト1名と全ユーザー公開は別操作です。
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={handleApplyTestUser} disabled={busy} className="px-3 py-2 text-sm border border-blue-300 bg-white rounded-lg disabled:opacity-50">
+              テストユーザー1名へ適用
+            </button>
+            <button onClick={handleSetDefault} disabled={busy} className="px-3 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg disabled:opacity-50">
+              全ユーザーへ公開
+            </button>
+            <button onClick={handleClearDefault} disabled={busy || !group.isDefaultForAll} className="px-3 py-2 text-sm border border-gray-300 bg-white rounded-lg disabled:opacity-50">
+              全ユーザー設定を解除
+            </button>
+          </div>
+        </section>
       )}
 
       {/* タブバー */}
@@ -590,6 +686,28 @@ function Editor({
       </div>
 
       {/* ─────────── 危険な操作 (画面最下部に分離) ─────────── */}
+      <section className="mt-10 bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+        <h2 className="text-sm font-semibold text-gray-800 mb-3">操作履歴・エラーログ</h2>
+        {history.length === 0 ? (
+          <p className="text-xs text-gray-500">履歴はまだありません。</p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((item) => (
+              <div key={item.id} className="text-xs border-b border-gray-100 pb-2">
+                <div className="flex justify-between gap-3">
+                  <span className={item.status === 'error' ? 'text-red-700 font-medium' : 'text-gray-800'}>
+                    {item.operation} — {item.status}
+                  </span>
+                  <span className="text-gray-400">{item.createdAt}</span>
+                </div>
+                {item.richMenuId && <div className="font-mono text-gray-500">{item.richMenuId}</div>}
+                {item.errorMessage && <div className="text-red-600">{item.errorMessage}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="mt-10 bg-red-50 border border-red-200 rounded-lg shadow-sm p-5">
         <h2 className="text-sm font-semibold text-red-700 mb-1">危険な操作</h2>
         <p className="text-xs text-red-600 mb-4">

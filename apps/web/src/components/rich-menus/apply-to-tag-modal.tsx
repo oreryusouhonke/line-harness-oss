@@ -11,14 +11,11 @@ type Props = {
   onClose: () => void
 }
 
-type Mode =
-  | { kind: 'tag'; tagId: string }
-  | { kind: 'all-followers' }
-  | { kind: 'set-default' }
+type Mode = { kind: 'tag'; tagId: string }
 
 export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
   const [tags, setTags] = useState<Tag[]>([])
-  const [mode, setMode] = useState<Mode>({ kind: 'all-followers' })
+  const [mode, setMode] = useState<Mode>({ kind: 'tag', tagId: '' })
   const [phase, setPhase] = useState<'config' | 'running' | 'done' | 'error'>(
     'config',
   )
@@ -42,27 +39,10 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
   }, [])
 
   async function apply() {
-    // 「全員のデフォルト」は影響範囲が大きいので強い確認。
-    if (mode.kind === 'set-default') {
-      if (
-        !confirm(
-          'このリッチメニューを「LINE 公式アカウントの全員のデフォルト」に設定します。\n\n' +
-            '・新規友だちも含め、特別な設定をしていない全員に表示されます\n' +
-            '・同アカウント内で他のメニューがデフォルトに設定されていた場合、そちらは解除されます\n\n' +
-            '続行しますか？',
-        )
-      )
-        return
-    }
     setPhase('running')
     setError(null)
     try {
-      const params =
-        mode.kind === 'tag'
-          ? { mode: 'bulk-link' as const, tagId: mode.tagId }
-          : mode.kind === 'all-followers'
-            ? { mode: 'bulk-link' as const, tagId: null }
-            : { mode: 'set-default' as const }
+      const params = { mode: 'bulk-link' as const, tagId: mode.tagId }
       const res = await api.richMenuGroups.applyToTag(groupId, params)
       if (!res.success) throw new Error(res.error ?? '適用失敗')
       setResult(res.data)
@@ -86,13 +66,7 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
             <>
               <div className="space-y-3 mb-5">
                 <RadioOption
-                  checked={mode.kind === 'all-followers'}
-                  onChange={() => setMode({ kind: 'all-followers' })}
-                  label="このアカウントの全員に適用"
-                  description="現時点で friend 状態の友だち全員に LINE のメニューを link します。新規友だちには適用されません。"
-                />
-                <RadioOption
-                  checked={mode.kind === 'tag'}
+                  checked
                   onChange={() =>
                     setMode({
                       kind: 'tag',
@@ -123,13 +97,6 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
                     </select>
                   )}
                 </RadioOption>
-                <RadioOption
-                  checked={mode.kind === 'set-default'}
-                  onChange={() => setMode({ kind: 'set-default' })}
-                  label="全員のデフォルトに設定する"
-                  description="LINE 公式アカウントのデフォルトメニューにします。新規友だちも含め全員に自動で表示されます。同アカ内の他メニューのデフォルト設定は解除されます。"
-                  warn
-                />
               </div>
               <div className="flex justify-end gap-2">
                 <button
@@ -140,7 +107,7 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
                 </button>
                 <button
                   onClick={apply}
-                  disabled={mode.kind === 'tag' && !mode.tagId}
+                  disabled={!mode.tagId}
                   className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
                   style={{ backgroundColor: '#06C755' }}
                 >

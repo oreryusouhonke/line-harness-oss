@@ -94,6 +94,20 @@ export interface RichMenuGroupWithPages extends RichMenuGroup {
   pages: RichMenuPageWithAreas[];
 }
 
+export interface RichMenuOperationLog {
+  id: string;
+  account_id: string;
+  group_id: string | null;
+  staff_id: string | null;
+  operation: string;
+  status: 'success' | 'error';
+  richmenu_id: string | null;
+  before_json: string | null;
+  after_json: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
 // alias は決定論的命名: 同 group 内で order_index ごとに一意、再 publish も idempotent。
 export function buildRichMenuAliasId(groupId: string, orderIndex: number): string {
   return `lhx-${groupId.slice(0, 8)}-${orderIndex}`;
@@ -238,6 +252,75 @@ export async function createRichMenuGroup(
   const created = await getRichMenuGroupWithPages(db, groupId);
   if (!created) throw new Error('failed to read back created rich menu group');
   return created;
+}
+
+export async function duplicateRichMenuGroup(
+  db: D1Database,
+  source: RichMenuGroupWithPages,
+  name: string,
+): Promise<RichMenuGroupWithPages> {
+  return createRichMenuGroup(db, {
+    accountId: source.account_id,
+    name,
+    chatBarText: source.chat_bar_text,
+    size: source.size,
+    pages: source.pages.map((page) => ({
+      name: page.name,
+      orderIndex: page.order_index,
+      areas: page.areas.map((area) => ({
+        boundsX: area.bounds_x,
+        boundsY: area.bounds_y,
+        boundsWidth: area.bounds_width,
+        boundsHeight: area.bounds_height,
+        actionType: area.action_type,
+        actionData: area.actionData,
+      })),
+    })),
+  });
+}
+
+export async function addRichMenuOperationLog(
+  db: D1Database,
+  input: {
+    accountId: string;
+    groupId?: string | null;
+    staffId?: string | null;
+    operation: string;
+    status: 'success' | 'error';
+    richMenuId?: string | null;
+    before?: unknown;
+    after?: unknown;
+    errorMessage?: string | null;
+  },
+): Promise<void> {
+  await db.prepare(
+    `INSERT INTO rich_menu_operation_logs
+       (id, account_id, group_id, staff_id, operation, status, richmenu_id,
+        before_json, after_json, error_message, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    crypto.randomUUID(), input.accountId, input.groupId ?? null,
+    input.staffId ?? null, input.operation, input.status,
+    input.richMenuId ?? null,
+    input.before === undefined ? null : JSON.stringify(input.before),
+    input.after === undefined ? null : JSON.stringify(input.after),
+    input.errorMessage ?? null, jstNow(),
+  ).run();
+}
+
+export async function getRichMenuOperationLogs(
+  db: D1Database,
+  accountId: string,
+  groupId?: string,
+): Promise<RichMenuOperationLog[]> {
+  const query = groupId
+    ? `SELECT * FROM rich_menu_operation_logs WHERE account_id = ? AND group_id = ? ORDER BY created_at DESC LIMIT 100`
+    : `SELECT * FROM rich_menu_operation_logs WHERE account_id = ? ORDER BY created_at DESC LIMIT 100`;
+  const stmt = groupId
+    ? db.prepare(query).bind(accountId, groupId)
+    : db.prepare(query).bind(accountId);
+  const result = await stmt.all<RichMenuOperationLog>();
+  return result.results ?? [];
 }
 
 export async function updateRichMenuGroupMeta(

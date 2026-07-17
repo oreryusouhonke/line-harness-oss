@@ -75,6 +75,9 @@ import { profileRefresh } from './routes/profile-refresh.js';
 import { richMenuGroups } from './routes/rich-menu-groups.js';
 import adminVersion from './routes/admin-version.js';
 import adminUpdate from './routes/admin-update.js';
+import { rakuten } from './routes/rakuten.js';
+import { nextEngine } from './routes/next-engine.js';
+import { iemotoVoice } from './routes/iemoto-voice.js';
 
 export type Env = {
   Bindings: {
@@ -97,6 +100,15 @@ export type Env = {
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
     IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
+    RAKUTEN_SERVICE_SECRET?: string;
+    RAKUTEN_LICENSE_KEY?: string;
+    NEXT_ENGINE_CLIENT_ID?: string;
+    NEXT_ENGINE_CLIENT_SECRET?: string;
+    NEXT_ENGINE_REDIRECT_URI?: string;
+    IEMOTO_BOT_ENABLED?: string;
+    IEMOTO_BOT_BASE_URL?: string;
+    IEMOTO_BOT_SHARED_SECRET?: string;
+    IEMOTO_LINE_ACCOUNT_ID?: string;
     // Phase 5 self-update — consumed by /admin/update/*. Defaults live in
     // wrangler.toml [vars]; secrets (CF_API_TOKEN, ADMIN_API_KEY) come from
     // `wrangler secret put`. All are optional at the type level so the rest
@@ -186,6 +198,9 @@ app.route('/', messageTemplates);
 app.route('/', dedupPreview);
 app.route('/', profileRefresh);
 app.route('/', richMenuGroups);
+app.route('/', rakuten);
+app.route('/', nextEngine);
+app.route('/', iemotoVoice);
 
 // Phase 5 (upgrade flow) — public build metadata endpoint. Mounted under
 // /admin/ but intentionally unauthenticated: the dashboard fetches /admin/version
