@@ -91,16 +91,9 @@ import { webinarRoutes } from './routes/webinars.js';
 import { instagramEngagement } from './routes/instagram-engagement.js';
 import adminVersion from './routes/admin-version.js';
 import adminUpdate from './routes/admin-update.js';
-import { adminSso } from './routes/admin-sso.js';
-import { mediaInquiries } from './routes/media-inquiries.js';
-import { isLinkPreviewBot } from './lib/og-bot.js';
-import { buildOgHtml } from './lib/og-html.js';
-import { loginUnconfiguredPage } from './lib/login-unconfigured.js';
-import {
-  resolveOgForEvent,
-  resolveOgForForm,
-  resolveOgForAccount,
-} from './lib/og-resolver.js';
+import { rakuten } from './routes/rakuten.js';
+import { nextEngine } from './routes/next-engine.js';
+import { iemotoVoice } from './routes/iemoto-voice.js';
 
 export type Env = {
   Bindings: {
@@ -128,6 +121,15 @@ export type Env = {
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
     IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
+    RAKUTEN_SERVICE_SECRET?: string;
+    RAKUTEN_LICENSE_KEY?: string;
+    NEXT_ENGINE_CLIENT_ID?: string;
+    NEXT_ENGINE_CLIENT_SECRET?: string;
+    NEXT_ENGINE_REDIRECT_URI?: string;
+    IEMOTO_BOT_ENABLED?: string;
+    IEMOTO_BOT_BASE_URL?: string;
+    IEMOTO_BOT_SHARED_SECRET?: string;
+    IEMOTO_LINE_ACCOUNT_ID?: string;
     // Phase 5 self-update — consumed by /admin/update/*. Defaults live in
     // wrangler.toml [vars]; secrets (CF_API_TOKEN, ADMIN_API_KEY) come from
     // `wrangler secret put`. All are optional at the type level so the rest
@@ -253,10 +255,9 @@ app.route('/', messageTemplates);
 app.route('/', dedupPreview);
 app.route('/', profileRefresh);
 app.route('/', richMenuGroups);
-app.route('/', webinarRoutes);
-app.route('/', instagramEngagement);
-// LINE Messaging API 互換プロキシ — 外部エージェントの直接送信を messages_log に残す
-app.route('/', lineProxy);
+app.route('/', rakuten);
+app.route('/', nextEngine);
+app.route('/', iemotoVoice);
 
 // Phase 5 (upgrade flow) — public build metadata endpoint. Mounted under
 // /admin/ but intentionally unauthenticated: the dashboard fetches /admin/version

@@ -122,24 +122,6 @@ export default function RichMenusListPage() {
     }
   }
 
-  async function handleDeleteExternal(menu: LineMenu) {
-    if (!selectedAccount?.id) return
-    if (
-      !confirm(
-        `LINE 上のリッチメニュー「${menu.name}」(richMenuId: ${menu.richMenuId.slice(0, 14)}...) を削除します。\n\n` +
-          'この管理画面外で作成されたメニューを LINE 公式アカウントから消します。元に戻せません。\n\n続行しますか？',
-      )
-    )
-      return
-    try {
-      const res = await api.richMenuGroups.deleteExternal(menu.richMenuId, selectedAccount.id)
-      if (!res.success) throw new Error(res.error ?? '削除失敗')
-      await reload()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
-    }
-  }
-
   async function handleImport(menu: LineMenu) {
     if (!selectedAccount?.id) return
     if (
@@ -153,6 +135,18 @@ export default function RichMenusListPage() {
       const res = await api.richMenuGroups.importFromLine(menu.richMenuId, selectedAccount.id)
       if (!res.success) throw new Error(res.error ?? '取り込み失敗')
       alert(`取り込みました: ${res.data?.name ?? menu.name}`)
+      await reload()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function handleDuplicate(group: RichMenuGroupListItem) {
+    const name = prompt('複製後のメニュー名を入力してください。', `${group.name} のコピー`)
+    if (!name?.trim()) return
+    try {
+      const res = await api.richMenuGroups.duplicate(group.id, name.trim())
+      if (!res.success) throw new Error(res.error ?? '複製失敗')
       await reload()
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e))
@@ -197,7 +191,6 @@ export default function RichMenusListPage() {
           accountId={selectedAccount.id}
           accountName={selectedAccount.displayName || selectedAccount.name}
           external={external}
-          onDeleteExternal={handleDeleteExternal}
           onImport={handleImport}
         />
       )}
@@ -278,6 +271,12 @@ export default function RichMenusListPage() {
                 </div>
               </Link>
               <div className="border-t border-gray-100 px-4 py-2.5 flex justify-end gap-4 text-xs">
+                <button
+                  onClick={() => handleDuplicate(g)}
+                  className="text-gray-600 hover:underline"
+                >
+                  複製
+                </button>
                 {g.status === 'published' && (
                   <button
                     onClick={() => setApplyTo(g)}
@@ -321,13 +320,11 @@ function ExternalSection({
   accountId,
   accountName,
   external,
-  onDeleteExternal,
   onImport,
 }: {
   accountId: string
   accountName: string
   external: { currentDefault: string | null; lineMenus: LineMenu[] }
-  onDeleteExternal: (menu: LineMenu) => void
   onImport: (menu: LineMenu) => void
 }) {
   const { currentDefault, lineMenus } = external
@@ -482,13 +479,9 @@ function ExternalSection({
                         >
                           管理画面に取り込む
                         </button>
-                        <button
-                          onClick={() => onDeleteExternal(m)}
-                          className="text-xs text-gray-400 hover:text-red-600 hover:underline"
-                          title="LINE から削除 (管理画面外メニューのみ)"
-                        >
-                          LINE から削除
-                        </button>
+                        <span className="text-[10px] text-gray-400" title="誤削除防止のため一覧画面からは削除できません">
+                          削除は安全確認画面からのみ
+                        </span>
                       </div>
                     )}
                   </td>

@@ -175,6 +175,14 @@ export class LineClient {
     return data;
   }
 
+  async clearDefaultRichMenu(): Promise<unknown> {
+    const { data } = await this.request(
+      'DELETE',
+      '/v2/bot/user/all/richmenu',
+    );
+    return data;
+  }
+
   async linkRichMenuToUser(
     userId: string,
     richMenuId: string,

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import {
   getRichMenuGroups,
   getRichMenuGroupById,
@@ -14,7 +14,11 @@ import {
   setPageRichMenuId,
   markRichMenuGroupPublished,
   markRichMenuGroupUnpublished,
+  duplicateRichMenuGroup,
+  addRichMenuOperationLog,
+  getRichMenuOperationLogs,
   getLineAccountById,
+  getFriendById,
   getFollowingLineUserIdsByTag,
   type RichMenuGroup,
   type RichMenuGroupWithPages,
@@ -35,6 +39,11 @@ import {
 } from '../lib/rich-menu-publisher.js';
 
 export const richMenuGroups = new Hono<Env>();
+
+function requireOwner(c: Context<Env>) {
+  const staff = c.get('staff');
+  return staff?.role === 'owner' ? staff : null;
+}
 
 // ----- Serialization (snake_case row → camelCase response) -----
 
@@ -656,6 +665,41 @@ richMenuGroups.post('/api/rich-menu-groups', async (c) => {
   return c.json({ success: true, data: serializeGroupWithPages(created) });
 });
 
+// Creates a D1-only draft copy. Images and LINE IDs are intentionally not copied.
+richMenuGroups.post('/api/rich-menu-groups/:groupId/duplicate', async (c) => {
+  const source = await getRichMenuGroupWithPages(c.env.DB, c.req.param('groupId'));
+  if (!source) return c.json({ success: false, error: 'not found' }, 404);
+  const body = await c.req.json<{ name?: string }>().catch(() => ({} as { name?: string }));
+  const name = body.name?.trim() || `${source.name} のコピー`;
+  const created = await duplicateRichMenuGroup(c.env.DB, source, name);
+  await addRichMenuOperationLog(c.env.DB, {
+    accountId: source.account_id,
+    groupId: created.id,
+    staffId: c.get('staff')?.id,
+    operation: 'duplicate_draft',
+    status: 'success',
+    before: serializeGroupWithPages(source),
+    after: serializeGroupWithPages(created),
+  });
+  return c.json({ success: true, data: serializeGroupWithPages(created) });
+});
+
+richMenuGroups.get('/api/rich-menu-groups/:groupId/history', async (c) => {
+  const group = await getRichMenuGroupById(c.env.DB, c.req.param('groupId'));
+  if (!group) return c.json({ success: false, error: 'not found' }, 404);
+  const logs = await getRichMenuOperationLogs(c.env.DB, group.account_id, group.id);
+  return c.json({ success: true, data: logs.map((log) => ({
+    id: log.id,
+    operation: log.operation,
+    status: log.status,
+    richMenuId: log.richmenu_id,
+    before: log.before_json ? JSON.parse(log.before_json) : null,
+    after: log.after_json ? JSON.parse(log.after_json) : null,
+    errorMessage: log.error_message,
+    createdAt: log.created_at,
+  })) });
+});
+
 richMenuGroups.patch('/api/rich-menu-groups/:groupId', async (c) => {
   const groupId = c.req.param('groupId');
   const existing = await getRichMenuGroupById(c.env.DB, groupId);
@@ -876,8 +920,9 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/publish', async (c) => {
       id: group.id,
       size: group.size,
       chatBarText: group.chat_bar_text,
-      isDefaultForAll: group.is_default_for_all === 1,
-      selected: group.selected === 1,
+      // Registration must never publish to all users. Setting the account
+      // default is a separate, owner-only endpoint below.
+      isDefaultForAll: false,
       pages: group.pages.map((p) => ({
         id: p.id,
         orderIndex: p.order_index,
@@ -968,8 +1013,11 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/apply-to-tag', async (c) => 
   }
   const r = (body as { tagId?: unknown; mode?: unknown }) ?? {};
   const mode = (r.mode as string | undefined) ?? 'bulk-link';
-  if (mode !== 'bulk-link' && mode !== 'set-default') {
-    return c.json({ success: false, error: "mode must be 'bulk-link' or 'set-default'" }, 400);
+  if (mode === 'set-default') {
+    return c.json({ success: false, error: 'use the owner-confirmed /set-default endpoint' }, 400);
+  }
+  if (mode !== 'bulk-link') {
+    return c.json({ success: false, error: "mode must be 'bulk-link'" }, 400);
   }
   if (mode === 'bulk-link') {
     if (r.tagId !== null && r.tagId !== undefined && typeof r.tagId !== 'string') {
@@ -977,6 +1025,9 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/apply-to-tag', async (c) => 
     }
   }
   const tagId = (r.tagId as string | null | undefined) ?? null;
+  if (!tagId) {
+    return c.json({ success: false, error: 'tagId is required; all-user operations use dedicated endpoints' }, 400);
+  }
 
   const group = await getRichMenuGroupWithPages(c.env.DB, groupId);
   if (!group) return c.json({ success: false, error: 'not found' }, 404);
@@ -999,36 +1050,6 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/apply-to-tag', async (c) => 
 
   const account = await getLineAccountById(c.env.DB, group.account_id);
   if (!account) return c.json({ success: false, error: 'line account not found' }, 500);
-
-  // ---- mode: set-default (LINE 全員のデフォルトに設定) ----
-  if (mode === 'set-default') {
-    try {
-      const line = createLineClient(account.channel_access_token);
-      await line.setDefaultRichMenu(targetPage.line_richmenu_id);
-      // 同 account 内の他 group の is_default_for_all をリセットして、自分だけ true に。
-      const now = new Date().toISOString();
-      await c.env.DB.batch([
-        c.env.DB
-          .prepare(
-            `UPDATE rich_menu_groups SET is_default_for_all = 0, updated_at = ?
-              WHERE account_id = ? AND id != ?`,
-          )
-          .bind(now, group.account_id, groupId),
-        c.env.DB
-          .prepare(
-            `UPDATE rich_menu_groups SET is_default_for_all = 1, updated_at = ? WHERE id = ?`,
-          )
-          .bind(now, groupId),
-      ]);
-      return c.json({
-        success: true,
-        data: { mode: 'set-default', total: 0, chunks: 0, message: '全員のデフォルトに設定しました' },
-      });
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      return c.json({ success: false, error: message }, 500);
-    }
-  }
 
   // ---- mode: bulk-link (タグ or 全 follower に link) ----
   const userIds = await getFollowingLineUserIdsByTag(
@@ -1055,4 +1076,87 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/apply-to-tag', async (c) => 
     const message = e instanceof Error ? e.message : String(e);
     return c.json({ success: false, error: message }, 500);
   }
+});
+
+// Apply to exactly one test friend. This never changes the account default.
+richMenuGroups.post('/api/rich-menu-groups/:groupId/apply-test-user', async (c) => {
+  const group = await getRichMenuGroupWithPages(c.env.DB, c.req.param('groupId'));
+  if (!group) return c.json({ success: false, error: 'not found' }, 404);
+  const body = await c.req.json<{ friendId?: string }>().catch(() => ({} as { friendId?: string }));
+  if (!body.friendId) return c.json({ success: false, error: 'friendId required' }, 400);
+  const friend = await getFriendById(c.env.DB, body.friendId);
+  if (!friend || friend.line_account_id !== group.account_id) {
+    return c.json({ success: false, error: 'test friend not found in this account' }, 404);
+  }
+  const page = group.pages.find((p) => p.id === group.default_page_id) ?? group.pages[0];
+  if (group.status !== 'published' || !page?.line_richmenu_id) {
+    return c.json({ success: false, error: 'register the menu with LINE first' }, 400);
+  }
+  const account = await getLineAccountById(c.env.DB, group.account_id);
+  if (!account) return c.json({ success: false, error: 'line account not found' }, 500);
+  try {
+    const res = await fetch(
+      `https://api.line.me/v2/bot/user/${encodeURIComponent(friend.line_user_id)}/richmenu/${encodeURIComponent(page.line_richmenu_id)}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${account.channel_access_token}` } },
+    );
+    if (!res.ok) throw new Error(`LINE link test user failed: ${res.status} ${await res.text()}`);
+    await addRichMenuOperationLog(c.env.DB, {
+      accountId: group.account_id, groupId: group.id, staffId: c.get('staff')?.id,
+      operation: 'apply_test_user', status: 'success', richMenuId: page.line_richmenu_id,
+      after: { friendId: friend.id },
+    });
+    return c.json({ success: true, data: { friendId: friend.id, richMenuId: page.line_richmenu_id } });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    await addRichMenuOperationLog(c.env.DB, {
+      accountId: group.account_id, groupId: group.id, staffId: c.get('staff')?.id,
+      operation: 'apply_test_user', status: 'error', richMenuId: page.line_richmenu_id,
+      errorMessage: message,
+    });
+    return c.json({ success: false, error: message }, 500);
+  }
+});
+
+// Owner-only global publication. The caller must echo the current identifiers.
+richMenuGroups.post('/api/rich-menu-groups/:groupId/set-default', async (c) => {
+  const staff = requireOwner(c);
+  if (!staff) return c.json({ success: false, error: 'owner role required' }, 403);
+  const group = await getRichMenuGroupWithPages(c.env.DB, c.req.param('groupId'));
+  if (!group) return c.json({ success: false, error: 'not found' }, 404);
+  const page = group.pages.find((p) => p.id === group.default_page_id) ?? group.pages[0];
+  const body = await c.req.json<{ accountId?: string; menuName?: string; richMenuId?: string }>().catch(() => ({} as { accountId?: string; menuName?: string; richMenuId?: string }));
+  if (!page?.line_richmenu_id || body.accountId !== group.account_id || body.menuName !== group.name || body.richMenuId !== page.line_richmenu_id) {
+    return c.json({ success: false, error: 'confirmation values do not match current settings' }, 409);
+  }
+  const account = await getLineAccountById(c.env.DB, group.account_id);
+  if (!account) return c.json({ success: false, error: 'line account not found' }, 500);
+  const line = createLineClient(account.channel_access_token);
+  await line.setDefaultRichMenu(page.line_richmenu_id);
+  await c.env.DB.prepare(`UPDATE rich_menu_groups SET is_default_for_all = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE account_id = ?`).bind(group.id, group.account_id).run();
+  await addRichMenuOperationLog(c.env.DB, {
+    accountId: group.account_id, groupId: group.id, staffId: staff.id,
+    operation: 'set_default_for_all', status: 'success', richMenuId: page.line_richmenu_id,
+    before: { isDefaultForAll: false }, after: { isDefaultForAll: true },
+  });
+  return c.json({ success: true, data: { richMenuId: page.line_richmenu_id } });
+});
+
+// Clears only the Messaging API default. It does not delete menus or aliases,
+// allowing the Official Account Manager fallback to become visible again.
+richMenuGroups.post('/api/rich-menu-groups/:groupId/clear-default', async (c) => {
+  const staff = requireOwner(c);
+  if (!staff) return c.json({ success: false, error: 'owner role required' }, 403);
+  const group = await getRichMenuGroupWithPages(c.env.DB, c.req.param('groupId'));
+  if (!group) return c.json({ success: false, error: 'not found' }, 404);
+  const account = await getLineAccountById(c.env.DB, group.account_id);
+  if (!account) return c.json({ success: false, error: 'line account not found' }, 500);
+  const line = createLineClient(account.channel_access_token);
+  await line.clearDefaultRichMenu();
+  await c.env.DB.prepare(`UPDATE rich_menu_groups SET is_default_for_all = 0 WHERE account_id = ?`).bind(group.account_id).run();
+  await addRichMenuOperationLog(c.env.DB, {
+    accountId: group.account_id, groupId: group.id, staffId: staff.id,
+    operation: 'clear_default_for_all', status: 'success',
+    before: { isDefaultForAll: true }, after: { isDefaultForAll: false },
+  });
+  return c.json({ success: true, data: { fallback: 'official-account-manager' } });
 });

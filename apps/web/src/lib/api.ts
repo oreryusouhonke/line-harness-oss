@@ -1370,6 +1370,45 @@ export const api = {
         warnings: string[];
       }>>(`/api/rich-menu-groups/${groupId}/unpublish`, { method: 'POST' }),
 
+    duplicate: (groupId: string, name?: string) =>
+      fetchApi<ApiResponse<{ id: string; name: string }>>(
+        `/api/rich-menu-groups/${groupId}/duplicate`,
+        { method: 'POST', body: JSON.stringify({ name }) },
+      ),
+
+    applyTestUser: (groupId: string, friendId: string) =>
+      fetchApi<ApiResponse<{ friendId: string; richMenuId: string }>>(
+        `/api/rich-menu-groups/${groupId}/apply-test-user`,
+        { method: 'POST', body: JSON.stringify({ friendId }) },
+      ),
+
+    setDefault: (groupId: string, confirmation: {
+      accountId: string;
+      menuName: string;
+      richMenuId: string;
+    }) => fetchApi<ApiResponse<{ richMenuId: string }>>(
+      `/api/rich-menu-groups/${groupId}/set-default`,
+      { method: 'POST', body: JSON.stringify(confirmation) },
+    ),
+
+    clearDefault: (groupId: string) =>
+      fetchApi<ApiResponse<{ fallback: string }>>(
+        `/api/rich-menu-groups/${groupId}/clear-default`,
+        { method: 'POST' },
+      ),
+
+    history: (groupId: string) =>
+      fetchApi<ApiResponse<Array<{
+        id: string;
+        operation: string;
+        status: 'success' | 'error';
+        richMenuId: string | null;
+        before: unknown;
+        after: unknown;
+        errorMessage: string | null;
+        createdAt: string;
+      }>>>(`/api/rich-menu-groups/${groupId}/history`),
+
     external: (accountId: string) =>
       fetchApi<ApiResponse<{
         currentDefault: string | null;
@@ -1412,9 +1451,7 @@ export const api = {
 
     applyToTag: (
       groupId: string,
-      params:
-        | { mode: 'bulk-link'; tagId: string | null }
-        | { mode: 'set-default' },
+      params: { mode: 'bulk-link'; tagId: string },
     ) =>
       fetchApi<
         ApiResponse<{ chunks: number; total: number; message?: string; mode?: string }>

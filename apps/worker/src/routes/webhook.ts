@@ -166,17 +166,7 @@ webhook.post('/webhook', async (c) => {
       dispatchLineProxyLocally(request, c.env, c.executionCtx);
     for (const event of body.events) {
       try {
-        await handleEvent(
-          db,
-          lineClient,
-          event,
-          channelAccessToken,
-          matchedAccountId,
-          c.env.WORKER_URL || new URL(c.req.url).origin,
-          c.env.LIFF_URL,
-          c.env.IMAGES,
-          proxyDispatch,
-        );
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, c.env);
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -197,7 +187,7 @@ async function handleEvent(
   workerUrl?: string,
   liffUrl?: string,
   r2?: R2Bucket,
-  proxyDispatch?: HarnessProxyDispatch,
+  routingEnv: IemotoRoutingEnv = {},
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -490,18 +480,11 @@ async function handleEvent(
       )
       .bind(logId, friend.id, msg.type, finalContent, jstNow())
       .run();
-    await awardActivityMileage(db, {
-      eventType: 'message_received',
-      source: 'line',
-      sourceEventId: logId,
-      friendId: friend.id,
-      metadata: { messageType: msg.type },
-    });
-    // text と同様、非 text の自発メッセージ (画像/スタンプ等) でも chat を unread に戻す。
-    // これが無いと resolved 除外 (unanswered-inbox CANDIDATES_SQL) が「解決済み後に
-    // 画像だけ送ってきた友だち」をバッジ・未対応一覧から永久に落としてしまう。
-    // 非 text は auto_reply keyword にマッチし得ないので常に要対応扱いで正しい。
-    await upsertChatOnMessage(db, friend.id);
+    if (msg.type === 'image' && await routeToSharedDesignBot(db, {
+      lineAccountId,
+      lineAccessToken,
+      event,
+    })) return;
     return;
   }
 
@@ -527,14 +510,30 @@ async function handleEvent(
       .bind(logId, friend.id, incomingText, now)
       .run();
 
-    await awardActivityMileage(db, {
-      eventType: 'message_received',
-      source: 'line',
-      sourceEventId: logId,
-      friendId: friend.id,
-      metadata: { messageType: 'text' },
-      occurredAt: now,
+    // 「デザイン作成」で開始した10分間だけ共通デザインBotへ中継する。
+    // リッチメニューやWebhook所有権は変更せず、Harnessを単一の入口に保つ。
+    if (await routeToSharedDesignBot(db, {
+      lineAccountId,
+      lineAccessToken,
+      event,
+    })) return;
+
+    // 家元Bot is an optional downstream service. It never owns the LINE webhook;
+    // Harness remains the single reply owner, which prevents duplicate replies.
+    const iemotoReply = await routeToIemotoBot(routingEnv, {
+      lineAccountId,
+      lineUserId: userId,
+      text: incomingText,
+      friend,
     });
+    if (iemotoReply) {
+      await lineClient.replyMessage(event.replyToken, [{ type: 'text', text: iemotoReply.slice(0, 4900) }]);
+      await db.prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
+         VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'iemoto_bot', ?)`,
+      ).bind(crypto.randomUUID(), friend.id, iemotoReply, jstNow()).run();
+      return;
+    }
 
     // Cross-account trigger: send message from another account via UUID
     if (incomingText === '体験を完了する' && lineAccountId) {
@@ -626,6 +625,112 @@ async function handleEvent(
 
     return;
   }
+}
+
+type IemotoRoutingEnv = Pick<Env['Bindings'], 'IEMOTO_BOT_ENABLED' | 'IEMOTO_BOT_BASE_URL' | 'IEMOTO_BOT_SHARED_SECRET' | 'IEMOTO_LINE_ACCOUNT_ID'>;
+
+export async function routeToIemotoBot(
+  env: IemotoRoutingEnv,
+  input: { lineAccountId: string | null; lineUserId: string; text: string; friend: Friend },
+): Promise<string | null> {
+  if (env.IEMOTO_BOT_ENABLED !== 'true' || !env.IEMOTO_BOT_BASE_URL) return null;
+  if (env.IEMOTO_LINE_ACCOUNT_ID && input.lineAccountId !== env.IEMOTO_LINE_ACCOUNT_ID) return null;
+  const shouldRoute = /家元|相談|悩み|仕事|恋愛|夫婦|家族|愚痴|プレゼント|贈り物|商品|Tシャツ|名入れ|デザイン/.test(input.text);
+  if (!shouldRoute) return null;
+  try {
+    const response = await fetch(`${env.IEMOTO_BOT_BASE_URL.replace(/\/$/, '')}/line/webhook/local-test`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(env.IEMOTO_BOT_SHARED_SECRET ? { 'x-iemoto-secret': env.IEMOTO_BOT_SHARED_SECRET } : {}),
+      },
+      body: JSON.stringify({
+        lineUserId: input.lineUserId,
+        text: input.text,
+        userContext: {
+          displayName: input.friend.display_name,
+          tags: [],
+          recentCategories: [],
+        },
+      }),
+    });
+    if (!response.ok) return null;
+    const json = await response.json() as { action?: string; lineText?: string };
+    return json.action === 'reply' && json.lineText ? json.lineText : null;
+  } catch (error) {
+    console.error('[webhook] iemoto routing failed', error instanceof Error ? error.message : 'unknown');
+    return null;
+  }
+}
+
+const SHARED_DESIGN_ACCOUNT_CHANNELS = new Set([
+  '2010637219', // オリジナルグッズ制作（一般）
+  '2010637235', // オリジナルグッズで商売推進！（卸）
+  '2010637253', // 株式会社太陽 DTF出力
+  '2010637265', // 俺流工房〜オリジナルグッズ作成〜
+]);
+const DESIGN_BOT_CHANNEL_ID = '2004093583';
+const DESIGN_BOT_URL = 'https://line-ai-bot-qdl2.onrender.com/internal/harness/design-event';
+
+export async function routeToSharedDesignBot(
+  db: D1Database,
+  input: { lineAccountId: string | null; lineAccessToken: string; event: WebhookEvent },
+): Promise<boolean> {
+  if (!input.lineAccountId || input.event.type !== 'message') return false;
+  const row = await db.prepare(
+    `SELECT target.channel_id AS target_channel_id, gateway.channel_secret AS gateway_secret
+       FROM line_accounts target
+       JOIN line_accounts gateway ON gateway.channel_id = ?
+      WHERE target.id = ? AND target.is_active = 1
+      LIMIT 1`,
+  ).bind(DESIGN_BOT_CHANNEL_ID, input.lineAccountId).first<{
+    target_channel_id: string;
+    gateway_secret: string;
+  }>();
+  if (!row || !SHARED_DESIGN_ACCOUNT_CHANNELS.has(row.target_channel_id)) return false;
+
+  const payload = JSON.stringify({
+    accountId: input.lineAccountId,
+    accessToken: input.lineAccessToken,
+    event: input.event,
+  });
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(row.gateway_secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  const signature = btoa(String.fromCharCode(...new Uint8Array(signed)));
+
+  try {
+    const response = await fetch(DESIGN_BOT_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-design-signature': signature },
+      body: payload,
+    });
+    const result = await response.json() as { handled?: boolean };
+    return result.handled === true;
+  } catch (error) {
+    console.error('[webhook] shared design bot routing failed', error instanceof Error ? error.message : 'unknown');
+    return false;
+  }
+}
+
+/**
+ * auto_reply 行の content/type を resolve する。template_id が set なら templates
+ * から取得、参照切れや NULL のときは inline response_content/response_type を使う。
+ */
+async function resolveAutoReplyContent(
+  db: D1Database,
+  rule: { template_id: string | null; response_type: string; response_content: string },
+): Promise<{ messageType: string; content: string }> {
+  if (rule.template_id) {
+    const { getTemplateById } = await import('@line-crm/db');
+    const tpl = await getTemplateById(db, rule.template_id);
+    if (tpl) {
+      return { messageType: tpl.message_type, content: tpl.message_content };
+    }
+  }
+  return { messageType: rule.response_type, content: rule.response_content };
 }
 
 export { webhook };
