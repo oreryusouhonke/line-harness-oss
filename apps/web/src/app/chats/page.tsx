@@ -10,6 +10,7 @@ import FlexPreviewComponent from '@/components/flex-preview'
 import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
 import { isIemotoBotActive, isImportedLineHistory } from './chat-mode'
+import { resolveChatDisplayName } from './chat-display-name'
 
 interface Chat {
   id: string
@@ -102,19 +103,10 @@ function FriendNamePair({ lineDisplayName, managementNickname, fallback }: {
   managementNickname?: string | null
   fallback: string
 }) {
-  const lineName = lineDisplayName || fallback
-  const nickname = managementNickname?.trim()
-  const showNickname = nickname && nickname !== lineName
+  const displayName = resolveChatDisplayName({ lineDisplayName, managementNickname, fallback })
 
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <span className="truncate">{lineName}</span>
-      {showNickname && (
-        <span className="flex-shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
-          管理: {nickname}
-        </span>
-      )}
-    </span>
+    <span className="block min-w-0 truncate">{displayName}</span>
   )
 }
 
