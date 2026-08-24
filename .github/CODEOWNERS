@@ -1,0 +1,6 @@
+# Production and security-sensitive changes require owner review.
+* @oreryusouhonke
+
+/apps/worker/ @oreryusouhonke
+/packages/db/ @oreryusouhonke
+/.github/workflows/ @oreryusouhonke
