@@ -89,4 +89,37 @@ describe('GET /api/chats list preview', () => {
     expect(listSql).not.toContain('in_agg AS');
     expect(listSql).not.toContain("WHERE direction = 'incoming'");
   });
+
+  test('searches both the management name and the original LINE display name', async () => {
+    const { db, queries } = fakeDb({
+      id: 'friend-1',
+      friend_id: 'friend-1',
+      display_name: 'tsujimoto',
+      management_nickname: '辻本 太郎',
+      picture_url: null,
+      line_user_id: `U${'1'.repeat(32)}`,
+      line_account_id: 'account-1',
+      operator_id: null,
+      status: 'resolved',
+      notes: null,
+      last_message_at: '2026-08-12T20:23:07.867+09:00',
+      last_message_content: null,
+      last_message_direction: null,
+      last_message_type: null,
+      created_at: '2026-08-12T20:23:07.867+09:00',
+      updated_at: '2026-08-12T20:23:07.867+09:00',
+    });
+    const app = new Hono();
+    app.route('/', chats);
+
+    const response = await app.request(
+      new Request('http://worker.test/api/chats?search=%E8%BE%BB%E6%9C%AC'),
+      {},
+      { DB: db } as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(queries[0].sql).toContain('(f.management_nickname LIKE ? OR f.display_name LIKE ?)');
+    expect(queries[0].params).toEqual(['%辻本%', '%辻本%', 300]);
+  });
 });

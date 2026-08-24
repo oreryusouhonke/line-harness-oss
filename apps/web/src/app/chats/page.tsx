@@ -349,6 +349,8 @@ export default function ChatsPage() {
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('all')
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   // 個別チャットは全件表示が基本。解決済みを初期非表示にすると、移行済み37件のうち
   // 要対応の1件だけが残り「チャットが消えた」ように見えるため、必ずONで開始する。
   const [showResolved, setShowResolved] = useState(true)
@@ -359,6 +361,11 @@ export default function ChatsPage() {
     if (typeof window === 'undefined') return false
     return new URLSearchParams(window.location.search).get('unanswered') === '1'
   })
+
+  useEffect(() => {
+    const id = window.setTimeout(() => setSearchQuery(searchInput.trim()), 250)
+    return () => window.clearTimeout(id)
+  }, [searchInput])
 
   // unansweredOnly 変更時に URL を書き戻す
   useEffect(() => {
@@ -395,11 +402,12 @@ export default function ChatsPage() {
   const buildListParams = useCallback((cursor: { at: string; id: string } | null) => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
     accountId: selectedAccountId || undefined,
+    search: searchQuery || undefined,
     unansweredOnly,
     limit: CHAT_PAGE_SIZE,
     beforeAt: cursor?.at,
     beforeId: cursor?.id,
-  }), [selectedAccountId, statusFilter, unansweredOnly])
+  }), [selectedAccountId, searchQuery, statusFilter, unansweredOnly])
 
   const loadChats = useCallback(async (silent = false) => {
     if (silent && chatListRefreshInFlightRef.current) return
@@ -888,7 +896,14 @@ export default function ChatsPage() {
   }
 
   const activeChats = showResolved ? chats : chats.filter((chat) => chat.status !== 'resolved')
-  const visibleChats = activeChats.filter((chat) => {
+  const normalizedSearch = searchQuery.toLocaleLowerCase('ja-JP')
+  const searchedChats = normalizedSearch
+    ? activeChats.filter((chat) => (
+        [chat.managementNickname, chat.lineDisplayName, chat.friendName]
+          .some((name) => name?.toLocaleLowerCase('ja-JP').includes(normalizedSearch))
+      ))
+    : activeChats
+  const visibleChats = searchedChats.filter((chat) => {
     if (queueFilter === 'needs_action') return chat.status === 'unread'
     if (queueFilter === 'overdue') return chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())
     if (queueFilter === 'unassigned') return chat.handlingMode === 'human' && !chat.assignedStaffId
@@ -898,13 +913,13 @@ export default function ChatsPage() {
     return true
   })
   const queueCounts = {
-    all: activeChats.length,
-    needs_action: activeChats.filter((chat) => chat.status === 'unread').length,
-    overdue: activeChats.filter((chat) => chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())).length,
-    unassigned: activeChats.filter((chat) => chat.handlingMode === 'human' && !chat.assignedStaffId).length,
-    mine: activeChats.filter((chat) => Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)).length,
-    human: activeChats.filter((chat) => chat.handlingMode === 'human').length,
-    bot: activeChats.filter(isIemotoBotActive).length,
+    all: searchedChats.length,
+    needs_action: searchedChats.filter((chat) => chat.status === 'unread').length,
+    overdue: searchedChats.filter((chat) => chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())).length,
+    unassigned: searchedChats.filter((chat) => chat.handlingMode === 'human' && !chat.assignedStaffId).length,
+    mine: searchedChats.filter((chat) => Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)).length,
+    human: searchedChats.filter((chat) => chat.handlingMode === 'human').length,
+    bot: searchedChats.filter(isIemotoBotActive).length,
   }
 
   return (
@@ -920,6 +935,42 @@ export default function ChatsPage() {
       <div className="flex gap-3 h-[calc(100vh-84px)] lg:h-[calc(100vh-90px)]">
         {/* Left Panel: Chat List */}
         <div className={`w-full lg:w-72 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
+          {/* Name search */}
+          <div className="border-b border-gray-100 p-2">
+            <label htmlFor="chat-name-search" className="sr-only">チャットを名前で検索</label>
+            <div className="relative">
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
+              </svg>
+              <input
+                id="chat-name-search"
+                type="search"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="管理名・LINE名で検索"
+                autoComplete="off"
+                className="w-full rounded-md border border-gray-300 bg-gray-50 py-2 pl-8 pr-8 text-sm text-gray-900 placeholder:text-gray-400 focus:border-green-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-green-100"
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchInput(''); setSearchQuery('') }}
+                  aria-label="検索をクリア"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600"
+                >
+                  <svg aria-hidden="true" className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
           {/* Filter row */}
           <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
             {([
@@ -1066,6 +1117,11 @@ export default function ChatsPage() {
                     </button>
                   )
                 })}
+                {visibleChats.length === 0 && (
+                  <div className="px-4 py-10 text-center text-sm text-gray-400">
+                    {searchQuery ? '該当するチャットがありません' : '表示できるチャットがありません'}
+                  </div>
+                )}
                 {hasMoreChats && !unansweredOnly && (
                   <button
                     onClick={() => { void loadMoreChats() }}

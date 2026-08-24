@@ -199,6 +199,7 @@ chats.get('/api/chats', async (c) => {
     const status = c.req.query('status') ?? undefined;
     const operatorId = c.req.query('operatorId') ?? undefined;
     const lineAccountId = c.req.query('lineAccountId') ?? undefined;
+    const search = c.req.query('search')?.trim() || undefined;
     const unansweredOnly =
       c.req.query('unansweredOnly') === 'true' || c.req.query('unansweredOnly') === '1';
 
@@ -263,6 +264,10 @@ chats.get('/api/chats', async (c) => {
     if (lineAccountId) {
       conditions.push('f.line_account_id = ?');
       conditionBindings.push(lineAccountId);
+    }
+    if (search) {
+      conditions.push('(f.management_nickname LIKE ? OR f.display_name LIKE ?)');
+      conditionBindings.push(`%${search}%`, `%${search}%`);
     }
     // status / operator filter は chats を参照するので、その時だけ page CTE 側でも
     // chats を lookup する (無条件時は 全friend × chats lookup を省く)。
