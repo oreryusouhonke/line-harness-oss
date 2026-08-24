@@ -7,12 +7,13 @@ import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import { api } from '@/lib/api'
 import { TEMPLATES, templateToAreas } from '@/lib/rich-menu-templates'
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared'
 
 export default function NewRichMenuPage() {
   const router = useRouter()
   const { selectedAccount } = useAccount()
   const [name, setName] = useState('')
-  const [chatBarText, setChatBarText] = useState('メニュー')
+  const [chatBarText] = useState(RICH_MENU_CHAT_BAR_TEXT)
   const [templateKey, setTemplateKey] = useState(TEMPLATES[0].key)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -82,7 +83,7 @@ export default function NewRichMenuPage() {
           </label>
           <input
             value={chatBarText}
-            onChange={(e) => setChatBarText(e.target.value)}
+            readOnly
             maxLength={14}
             required
             className="block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"

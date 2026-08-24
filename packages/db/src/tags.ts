@@ -103,7 +103,7 @@ export async function getFriendsByTag(
 ): Promise<Friend[]> {
   const result = await db
     .prepare(
-      `SELECT f.*
+      `SELECT f.*, COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
        FROM friends f
        INNER JOIN friend_tags ft ON ft.friend_id = f.id
        WHERE ft.tag_id = ?

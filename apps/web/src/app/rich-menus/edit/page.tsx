@@ -7,6 +7,7 @@ import Header from '@/components/layout/header'
 import { api } from '@/lib/api'
 import { CanvasEditor, type Area } from '@/components/rich-menus/canvas-editor'
 import { AreaProperties } from '@/components/rich-menus/area-properties'
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared'
 
 type Page = {
   id: string
@@ -83,7 +84,7 @@ function Editor({
 
   // フォーム編集用 (group が読めたら反映)
   const [name, setName] = useState('')
-  const [chatBarText, setChatBarText] = useState('')
+  const [chatBarText, setChatBarText] = useState(RICH_MENU_CHAT_BAR_TEXT)
   const [pages, setPages] = useState<Page[]>([])
   const [selectedAreaId, setSelectedAreaId] = useState<string | null>(null)
   const [preview, setPreview] = useState(false)
@@ -116,7 +117,7 @@ function Editor({
       const g = res.data as Group
       setGroup(g)
       setName(g.name)
-      setChatBarText(g.chatBarText)
+      setChatBarText(RICH_MENU_CHAT_BAR_TEXT)
       setIsDefaultForAll(g.isDefaultForAll)
       setPages(g.pages)
       setActivePageId((prev) =>
@@ -607,7 +608,7 @@ function Editor({
               <span className="text-xs font-medium text-gray-600">トーク画面下の文言</span>
               <input
                 value={chatBarText}
-                onChange={(e) => setChatBarText(e.target.value)}
+                readOnly
                 maxLength={14}
                 className="mt-1 block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />

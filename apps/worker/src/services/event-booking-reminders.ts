@@ -135,7 +135,7 @@ export async function processDueEventReminders(
               e.name AS event_name, e.venue_name, e.venue_url, e.reminder_hours_before,
               s.starts_at,
               la.channel_access_token,
-              f.line_user_id
+              COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
          FROM event_booking_reminders r
          INNER JOIN event_bookings b ON b.id = r.booking_id
          INNER JOIN events e ON e.id = b.event_id

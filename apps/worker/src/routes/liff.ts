@@ -641,8 +641,10 @@ liffRoutes.get('/auth/callback', async (c) => {
     // Multi-account: resolve LINE Login credentials from DB
     let loginChannelId = c.env.LINE_LOGIN_CHANNEL_ID;
     let loginChannelSecret = c.env.LINE_LOGIN_CHANNEL_SECRET;
+    let resolvedLineAccountId: string | null = null;
     if (accountParam) {
       const account = await getLineAccountByChannelId(c.env.DB, accountParam);
+      resolvedLineAccountId = account?.id ?? null;
       if (account?.login_channel_id && account?.login_channel_secret) {
         loginChannelId = account.login_channel_id;
         loginChannelSecret = account.login_channel_secret;
@@ -718,6 +720,7 @@ liffRoutes.get('/auth/callback', async (c) => {
     // Upsert friend (may not exist yet if webhook hasn't fired)
     const friend = await upsertFriend(db, {
       lineUserId,
+      lineAccountId: resolvedLineAccountId,
       displayName,
       pictureUrl,
       statusMessage: null,

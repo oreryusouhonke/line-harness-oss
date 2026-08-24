@@ -2,10 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/api'
+import ManagementNicknameEditor from '@/components/friends/management-nickname-editor'
 
 interface FriendDetail {
   id: string
   displayName: string | null
+  lineDisplayName: string | null
+  managementNickname: string | null
   pictureUrl: string | null
   isFollowing: boolean
   metadata: Record<string, unknown>
@@ -112,7 +115,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
   if (!friendId) return null
 
   return (
-    <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
+    <div className="min-h-0 w-full lg:w-80 lg:flex-shrink bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
         <h3 className="text-sm font-semibold text-gray-700">友だち詳細</h3>
       </div>
@@ -152,6 +155,20 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   </span>
                 )}
               </div>
+            </div>
+
+            {/* Management-only nickname. Never changes the LINE profile name. */}
+            <div className="p-4">
+              <ManagementNicknameEditor
+                friendId={friend.id}
+                lineDisplayName={friend.lineDisplayName}
+                managementNickname={friend.managementNickname}
+                onSaved={(nickname) => setFriend((current) => current ? {
+                  ...current,
+                  managementNickname: nickname,
+                  displayName: nickname || current.lineDisplayName,
+                } : current)}
+              />
             </div>
 
             {/* Status / Operator */}

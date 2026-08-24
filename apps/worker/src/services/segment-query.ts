@@ -93,7 +93,7 @@ export function buildSegmentQuery(condition: SegmentCondition): { sql: string; b
 
   const separator = condition.operator === 'AND' ? ' AND ' : ' OR '
   const where = clauses.length > 0 ? clauses.join(separator) : '1=1'
-  const sql = `SELECT f.id, f.line_user_id FROM friends f WHERE ${where}`
+  const sql = `SELECT f.id, COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id FROM friends f WHERE ${where}`
 
   return { sql, bindings }
 }

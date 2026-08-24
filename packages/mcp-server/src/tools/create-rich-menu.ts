@@ -2,6 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getClient } from "../client.js";
 
+const RICH_MENU_CHAT_BAR_TEXT = "←ここから入力できます";
+
 export function registerCreateRichMenu(server: McpServer): void {
   server.tool(
     "create_rich_menu",
@@ -10,7 +12,7 @@ export function registerCreateRichMenu(server: McpServer): void {
       name: z.string().describe("Rich menu name"),
       chatBarText: z
         .string()
-        .default("\u30E1\u30CB\u30E5\u30FC")
+        .default(RICH_MENU_CHAT_BAR_TEXT)
         .describe("Text shown on the chat bar button"),
       size: z
         .object({
@@ -52,7 +54,7 @@ export function registerCreateRichMenu(server: McpServer): void {
         const client = getClient();
         const menu = await client.richMenus.create({
           name,
-          chatBarText,
+          chatBarText: RICH_MENU_CHAT_BAR_TEXT,
           size,
           selected,
           areas: JSON.parse(areas),

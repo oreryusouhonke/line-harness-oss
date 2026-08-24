@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../index.js';
+import { getCouponSaleConfig, saveCouponSaleConfig } from '../services/coupon-sale-automation.js';
 
 const accountSettings = new Hono<Env>();
 
@@ -50,6 +51,24 @@ accountSettings.put('/api/account-settings/test-recipients', async (c) => {
   ).run();
 
   return c.json({ success: true });
+});
+
+accountSettings.get('/api/account-settings/coupon-sale-automation', async (c) => {
+  const accountId = c.req.query('accountId');
+  if (!accountId) return c.json({ success: false, error: 'accountId required' }, 400);
+  const config = await getCouponSaleConfig(c.env.DB, accountId);
+  return c.json({ success: true, data: config });
+});
+
+accountSettings.put('/api/account-settings/coupon-sale-automation', async (c) => {
+  const body = await c.req.json<{ accountId?: string; config?: unknown }>();
+  if (!body.accountId) return c.json({ success: false, error: 'accountId required' }, 400);
+  try {
+    const config = await saveCouponSaleConfig(c.env.DB, body.accountId, body.config);
+    return c.json({ success: true, data: config });
+  } catch (error) {
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'invalid config' }, 400);
+  }
 });
 
 export { accountSettings };

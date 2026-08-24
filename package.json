@@ -14,6 +14,7 @@
     "db:migrate:local": "wrangler d1 execute line-crm --file=packages/db/schema.sql --local",
     "deploy:setup": "node packages/create-line-harness/dist/index.js",
     "deploy:update": "node packages/create-line-harness/dist/index.js update",
+    "test": "pnpm -r test && pnpm test:scripts",
     "test:scripts": "vitest run --config vitest.config.ts",
     "build:bundle": "tsx scripts/release/build-bundle.ts"
   },

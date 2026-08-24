@@ -3,6 +3,7 @@ export interface Friend {
   id: string;
   line_user_id: string;
   display_name: string | null;
+  management_nickname: string | null;
   picture_url: string | null;
   status_message: string | null;
   is_following: number;
@@ -29,7 +30,7 @@ export async function getFriends(
   if (tagId) {
     const result = await db
       .prepare(
-        `SELECT f.*
+        `SELECT f.*, COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
          FROM friends f
          INNER JOIN friend_tags ft ON ft.friend_id = f.id
          WHERE ft.tag_id = ?
@@ -43,7 +44,7 @@ export async function getFriends(
 
   const result = await db
     .prepare(
-      `SELECT * FROM friends
+      `SELECT *, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends
        ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
     )
@@ -68,7 +69,7 @@ export async function getFollowingLineUserIdsByTag(
   if (tagId) {
     const result = await db
       .prepare(
-        `SELECT DISTINCT f.line_user_id
+        `SELECT DISTINCT COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
            FROM friends f
            INNER JOIN friend_tags ft ON ft.friend_id = f.id
           WHERE ft.tag_id = ?
@@ -81,7 +82,7 @@ export async function getFollowingLineUserIdsByTag(
   }
   const result = await db
     .prepare(
-      `SELECT line_user_id
+      `SELECT COALESCE(line_platform_user_id, line_user_id) AS line_user_id
          FROM friends
         WHERE line_account_id = ? AND is_following = 1`,
     )
@@ -93,10 +94,17 @@ export async function getFollowingLineUserIdsByTag(
 export async function getFriendByLineUserId(
   db: D1Database,
   lineUserId: string,
+  lineAccountId?: string | null,
 ): Promise<Friend | null> {
+  const userPredicate = `(line_platform_user_id = ? OR (line_platform_user_id IS NULL AND line_user_id = ?))`;
+  if (lineAccountId !== undefined) {
+    return lineAccountId === null
+      ? db.prepare(`SELECT *, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE ${userPredicate} AND line_account_id IS NULL ORDER BY updated_at DESC LIMIT 1`).bind(lineUserId, lineUserId).first<Friend>()
+      : db.prepare(`SELECT *, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE ${userPredicate} AND line_account_id = ? LIMIT 1`).bind(lineUserId, lineUserId, lineAccountId).first<Friend>();
+  }
   return db
-    .prepare(`SELECT * FROM friends WHERE line_user_id = ?`)
-    .bind(lineUserId)
+    .prepare(`SELECT *, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE ${userPredicate} ORDER BY updated_at DESC LIMIT 1`)
+    .bind(lineUserId, lineUserId)
     .first<Friend>();
 }
 
@@ -105,7 +113,7 @@ export async function getFriendById(
   id: string,
 ): Promise<Friend | null> {
   return db
-    .prepare(`SELECT * FROM friends WHERE id = ?`)
+    .prepare(`SELECT *, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id = ?`)
     .bind(id)
     .first<Friend>();
 }
@@ -136,6 +144,7 @@ export async function setFriendFirstTrackedLinkIfNull(
 
 export interface UpsertFriendInput {
   lineUserId: string;
+  lineAccountId?: string | null;
   displayName?: string | null;
   pictureUrl?: string | null;
   statusMessage?: string | null;
@@ -146,7 +155,7 @@ export async function upsertFriend(
   input: UpsertFriendInput,
 ): Promise<Friend> {
   const now = jstNow();
-  const existing = await getFriendByLineUserId(db, input.lineUserId);
+  const existing = await getFriendByLineUserId(db, input.lineUserId, input.lineAccountId);
 
   if (existing) {
     await db
@@ -157,29 +166,37 @@ export async function upsertFriend(
              status_message = ?,
              is_following = 1,
              updated_at = ?
-         WHERE line_user_id = ?`,
+         WHERE id = ?`,
       )
       .bind(
         'displayName' in input ? (input.displayName ?? null) : existing.display_name,
         'pictureUrl' in input ? (input.pictureUrl ?? null) : existing.picture_url,
         'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
         now,
-        input.lineUserId,
+        existing.id,
       )
       .run();
 
-    return (await getFriendByLineUserId(db, input.lineUserId))!;
+    return (await getFriendById(db, existing.id))!;
   }
 
   const id = crypto.randomUUID();
   await db
     .prepare(
-      `INSERT INTO friends (id, line_user_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+      `INSERT INTO friends (id, line_user_id, line_platform_user_id, line_account_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+       ON CONFLICT(line_account_id, line_platform_user_id) DO UPDATE SET
+         display_name = excluded.display_name,
+         picture_url = excluded.picture_url,
+         status_message = excluded.status_message,
+         is_following = 1,
+         updated_at = excluded.updated_at`,
     )
     .bind(
       id,
+      input.lineAccountId ? `${input.lineAccountId}:${input.lineUserId}` : input.lineUserId,
       input.lineUserId,
+      input.lineAccountId ?? null,
       input.displayName ?? null,
       input.pictureUrl ?? null,
       input.statusMessage ?? null,
@@ -188,22 +205,31 @@ export async function upsertFriend(
     )
     .run();
 
-  return (await getFriendById(db, id))!;
+  // Another webhook request for the same account/user may have inserted the
+  // row after the lookup above. Return the persisted row regardless of which
+  // request won that race.
+  const persisted = await getFriendByLineUserId(db, input.lineUserId, input.lineAccountId);
+  if (!persisted) {
+    throw new Error('Failed to persist LINE friend');
+  }
+  return persisted;
 }
 
 export async function updateFriendFollowStatus(
   db: D1Database,
   lineUserId: string,
   isFollowing: boolean,
+  lineAccountId?: string | null,
 ): Promise<void> {
-  await db
-    .prepare(
-      `UPDATE friends
-       SET is_following = ?, updated_at = ?
-       WHERE line_user_id = ?`,
-    )
-    .bind(isFollowing ? 1 : 0, jstNow(), lineUserId)
-    .run();
+  const accountPredicate = lineAccountId === undefined
+    ? ''
+    : lineAccountId === null ? ' AND line_account_id IS NULL' : ' AND line_account_id = ?';
+  const stmt = db.prepare(
+    `UPDATE friends SET is_following = ?, updated_at = ? WHERE (line_platform_user_id = ? OR (line_platform_user_id IS NULL AND line_user_id = ?))${accountPredicate}`,
+  );
+  await (lineAccountId !== undefined && lineAccountId !== null
+    ? stmt.bind(isFollowing ? 1 : 0, jstNow(), lineUserId, lineUserId, lineAccountId)
+    : stmt.bind(isFollowing ? 1 : 0, jstNow(), lineUserId, lineUserId)).run();
 }
 
 /** Get merged metadata across all friend records sharing the same user_id (UUID). */

@@ -281,7 +281,7 @@ describe('POST /api/rich-menu-groups', () => {
     expect(dbMocks.createRichMenuGroup).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        accountId: 'a', name: 'x', chatBarText: 'バー', size: 'large',
+        accountId: 'a', name: 'x', chatBarText: '←ここから入力できます', size: 'large',
         pages: [expect.objectContaining({ name: 'p1', orderIndex: 0 })],
       }),
     );

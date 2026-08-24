@@ -1139,7 +1139,7 @@ events.get('/api/events/admin/events/:id/bookings', async (c) => {
     .prepare(
       `SELECT b.*,
               s.starts_at AS slot_starts_at, s.ends_at AS slot_ends_at,
-              f.display_name AS friend_display_name, f.line_user_id AS friend_line_user_id
+              f.display_name AS friend_display_name, COALESCE(f.line_platform_user_id, f.line_user_id) AS friend_line_user_id
          FROM event_bookings b
          JOIN event_slots s ON s.id = b.slot_id
          LEFT JOIN friends f ON f.id = b.friend_id
@@ -1194,7 +1194,7 @@ async function notifyBookingFriend(
         `SELECT e.name AS event_name, e.venue_name, e.venue_url,
                 s.starts_at AS slot_starts_at,
                 la.channel_access_token,
-                f.line_user_id
+                COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
            FROM event_bookings b
            JOIN events e ON e.id = b.event_id
            JOIN event_slots s ON s.id = b.slot_id

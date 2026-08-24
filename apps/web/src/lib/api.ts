@@ -128,7 +128,21 @@ export type FriendListParams = {
   handled?: 'unhandled'
 }
 
-export type FriendWithTags = Friend & { tags: Tag[] }
+// Keep the nickname fields explicit while older generated shared-package
+// declarations may still be present in a developer's node_modules cache.
+export type FriendWithTags = Friend & {
+  tags: Tag[]
+  lineDisplayName: string | null
+  managementNickname: string | null
+}
+export type FriendNicknameHistory = {
+  id: string
+  previousNickname: string | null
+  newNickname: string | null
+  changedByStaffId: string
+  changedByName: string
+  changedAt: string
+}
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
   latestIncomingMessage: { content: string; messageType: string; createdAt: string } | null
@@ -156,6 +170,13 @@ export const api = {
     },
     get: (id: string) =>
       fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`),
+    updateManagementNickname: (id: string, nickname: string | null) =>
+      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}/management-nickname`, {
+        method: 'PUT',
+        body: JSON.stringify({ nickname }),
+      }),
+    nicknameHistory: (id: string) =>
+      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/nickname-history`),
     count: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<{ count: number }>>('/api/friends/count' + query)
@@ -686,10 +707,24 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    send: (id: string, data: { content: string; messageType?: string }) =>
-      fetchApi<ApiResponse<unknown>>(`/api/chats/${id}/send`, {
+    send: (id: string, data: { content: string; messageType?: string; expectedVersion: number; idempotencyKey: string; quoteMessageId?: string }) =>
+      fetchApi<ApiResponse<{ sent: boolean; messageId: string; version: number; replayed: boolean }>>(`/api/chats/${id}/send`, {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    deleteMessage: (id: string, messageId: string) =>
+      fetchApi<ApiResponse<{ messageId: string; deleted: boolean }>>(`/api/chats/${id}/messages/${messageId}`, {
+        method: 'DELETE',
+      }),
+    handoff: (id: string, expectedVersion: number, idempotencyKey: string, reason = 'manual_handoff') =>
+      fetchApi<ApiResponse<{ mode: 'human'; version: number; botGeneration: number }>>(`/api/conversations/${id}/handoff`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion, idempotencyKey, reason, notifyCustomer: true }),
+      }),
+    returnToBot: (id: string, expectedVersion: number, idempotencyKey: string, reason = 'manual_return_to_bot') =>
+      fetchApi<ApiResponse<{ mode: 'bot'; version: number; botGeneration: number }>>(`/api/conversations/${id}/return-to-bot`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion, idempotencyKey, reason, notifyCustomer: true }),
       }),
   },
   reminders: {

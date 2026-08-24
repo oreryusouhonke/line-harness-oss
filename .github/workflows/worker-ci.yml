@@ -1,23 +1,31 @@
-name: Worker CI
+name: Project CI
 
 on:
   pull_request:
     paths:
       - 'apps/worker/**'
+      - 'apps/web/**'
       - 'packages/db/**'
+      - 'packages/sdk/**'
       - 'packages/shared/**'
       - 'packages/line-sdk/**'
       - 'packages/update-engine/**'
+      - 'scripts/**'
+      - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/worker-ci.yml'
   push:
     branches: [main]
     paths:
       - 'apps/worker/**'
+      - 'apps/web/**'
       - 'packages/db/**'
+      - 'packages/sdk/**'
       - 'packages/shared/**'
       - 'packages/line-sdk/**'
       - 'packages/update-engine/**'
+      - 'scripts/**'
+      - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/worker-ci.yml'
   workflow_dispatch:
@@ -26,7 +34,7 @@ permissions:
   contents: read
 
 jobs:
-  worker-ci:
+  project-ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,11 +47,22 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-crm/db --filter @line-harness/update-engine build
-      - run: pnpm --filter worker typecheck
-      - run: pnpm --filter worker test
-      - run: pnpm --filter worker build
+      - name: Check migration safety and numbering
+        run: pnpm tsx scripts/check-migrations.ts
+      - name: Run all unit tests
+        run: pnpm test
+      - name: Typecheck workspaces
+        run: pnpm --filter worker --filter web --filter @line-crm/db --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-harness/sdk --filter @line-harness/update-engine typecheck
+      - name: Build shared packages and SDKs
+        run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-harness/update-engine --filter @line-harness/sdk build
+      - name: Build Worker
+        run: pnpm --filter worker build
         env:
           VITE_LIFF_ID: ${{ vars.VITE_LIFF_ID }}
           VITE_BOT_BASIC_ID: ${{ vars.VITE_BOT_BASIC_ID }}
           VITE_CALENDAR_CONNECTION_ID: ${{ vars.VITE_CALENDAR_CONNECTION_ID }}
+      - name: Build Admin
+        run: pnpm --filter web build
+        env:
+          NEXT_PUBLIC_API_URL: https://ci.invalid
+          APP_BUILD_TIME: '1970-01-01T00:00:00Z'

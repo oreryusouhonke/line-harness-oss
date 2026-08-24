@@ -15,6 +15,7 @@ import {
 } from '@line-crm/db';
 import type { LineClient, Message } from '@line-crm/line-sdk';
 import { addJitter, sleep } from './stealth.js';
+import { isConversationHumanControlled } from './conversation-automation-guard.js';
 
 export async function processReminderDeliveries(
   db: D1Database,
@@ -35,6 +36,7 @@ export async function processReminderDeliveries(
       if (!friend || !friend.is_following) {
         continue;
       }
+      if (await isConversationHumanControlled(db, fr.friend_id)) continue;
 
       // Resolve correct lineClient for this friend's account
       let deliveryClient = lineClient;

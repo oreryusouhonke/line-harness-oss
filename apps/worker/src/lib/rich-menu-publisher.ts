@@ -10,6 +10,8 @@
 //   4. 旧 richmenu があれば DELETE
 // 最後に isDefaultForAll なら 1 ページ目を全友だち default に。
 
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared';
+
 export type Bounds = { x: number; y: number; width: number; height: number };
 
 export type ActionType = 'uri' | 'message' | 'postback' | 'richmenuswitch';
@@ -124,7 +126,7 @@ export async function publishRichMenuGroup(
       size: dimensions,
       selected: false,
       name: `${group.id.slice(0, 8)} - ${page.name}`,
-      chatBarText: group.chatBarText,
+      chatBarText: RICH_MENU_CHAT_BAR_TEXT,
       areas: page.areas.map((a) => ({
         bounds: a.bounds,
         action: { type: a.actionType, ...a.actionData },

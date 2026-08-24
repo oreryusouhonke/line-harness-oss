@@ -76,7 +76,7 @@ import { richMenuGroups } from './routes/rich-menu-groups.js';
 import adminVersion from './routes/admin-version.js';
 import adminUpdate from './routes/admin-update.js';
 import { rakuten } from './routes/rakuten.js';
-import { nextEngine } from './routes/next-engine.js';
+import { nextEngine, syncNextEngineRankings } from './routes/next-engine.js';
 import { iemotoVoice } from './routes/iemoto-voice.js';
 
 export type Env = {
@@ -105,6 +105,7 @@ export type Env = {
     NEXT_ENGINE_CLIENT_ID?: string;
     NEXT_ENGINE_CLIENT_SECRET?: string;
     NEXT_ENGINE_REDIRECT_URI?: string;
+    NEXT_ENGINE_RAKUTEN_ORDER_PREFIX?: string;
     IEMOTO_BOT_ENABLED?: string;
     IEMOTO_BOT_BASE_URL?: string;
     IEMOTO_BOT_SHARED_SECRET?: string;
@@ -604,6 +605,10 @@ async function scheduled(
   jobs.push(processQueuedBroadcasts(env.DB, defaultLineClient, env.WORKER_URL));
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
+  const { refreshConversationSla } = await import('./services/conversation-sla.js');
+  jobs.push(refreshConversationSla(env.DB));
+  const { recoverConversationOutbounds } = await import('./services/conversation-outbound.js');
+  jobs.push(recoverConversationOutbounds(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN));
 
   await Promise.allSettled(jobs);
 
@@ -630,6 +635,19 @@ async function scheduled(
 
   // Booking expirer — runs only on the 6h cron tick.
   if (event.cron === '0 */6 * * *') {
+    try {
+      const state = await env.DB.prepare(
+        `SELECT last_synced_at FROM next_engine_sync_state WHERE id = 'default'`,
+      ).first<{ last_synced_at: string | null }>();
+      const lastSync = state?.last_synced_at ? Date.parse(state.last_synced_at) : 0;
+      if (!lastSync || Date.now() - lastSync >= 7 * 24 * 60 * 60 * 1000) {
+        const result = await syncNextEngineRankings(env);
+        console.log(`[next-engine-ranking] products=${result.products} eligible=${result.eligible}`);
+      }
+    } catch (e) {
+      console.error('next-engine ranking sync error:', e);
+    }
+
     try {
       const result = await runExpirer(env.DB, {
         now: new Date(),

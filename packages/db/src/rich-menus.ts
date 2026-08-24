@@ -1,4 +1,5 @@
 import { jstNow } from './utils.js';
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared';
 
 // =============================================================================
 // Rich Menu Editor — groups / pages / areas
@@ -206,7 +207,7 @@ export async function createRichMenuGroup(
         groupId,
         input.accountId,
         input.name,
-        input.chatBarText,
+        RICH_MENU_CHAT_BAR_TEXT,
         input.size,
         defaultPageId,
         now,
@@ -262,7 +263,7 @@ export async function duplicateRichMenuGroup(
   return createRichMenuGroup(db, {
     accountId: source.account_id,
     name,
-    chatBarText: source.chat_bar_text,
+    chatBarText: RICH_MENU_CHAT_BAR_TEXT,
     size: source.size,
     pages: source.pages.map((page) => ({
       name: page.name,
@@ -336,7 +337,7 @@ export async function updateRichMenuGroupMeta(
   }
   if (patch.chatBarText !== undefined) {
     sets.push('chat_bar_text = ?');
-    vals.push(patch.chatBarText);
+    vals.push(RICH_MENU_CHAT_BAR_TEXT);
   }
   if (patch.isDefaultForAll !== undefined) {
     sets.push('is_default_for_all = ?');

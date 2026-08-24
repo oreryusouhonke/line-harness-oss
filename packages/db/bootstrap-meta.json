@@ -33,6 +33,8 @@
     "029_account_management_v2.sql",
     "030_dedup_progress.sql",
     "031_batch_lock_at.sql",
+    "031_iemoto_bot.sql",
+    "032_iemoto_voice.sql",
     "032_messages_log_line_account_id.sql",
     "033_auto_replies_template_id.sql",
     "034_webhook_secret_required.sql",
@@ -50,7 +52,18 @@
     "042_tracked_links_og.sql",
     "043_events_og.sql",
     "044_forms_og.sql",
-    "045_menus_auto_tag.sql"
+    "045_menus_auto_tag.sql",
+    "046_rich_menu_safety.sql",
+    "047_next_engine_integration.sql",
+    "048_chat_handling_mode.sql",
+    "049_conversation_control_foundation.sql",
+    "050_unique_chat_per_friend.sql",
+    "051_friend_management_nickname.sql",
+    "052_friend_account_scope.sql",
+    "053_next_engine_product_rankings.sql",
+    "054_next_engine_ranking_images.sql",
+    "055_next_engine_ranking_product_urls.sql",
+    "056_message_delete_and_quote_reply.sql"
   ],
-  "migrationCount": 51
+  "migrationCount": 64
 }

@@ -13,6 +13,9 @@ const dbMocks = {
   updateLineAccountFields: vi.fn(),
   updateLineAccountOrder: vi.fn(),
   deleteLineAccount: vi.fn(),
+  getTrafficPoolBySlug: vi.fn(),
+  createTrafficPool: vi.fn(),
+  addPoolAccount: vi.fn(),
 };
 vi.mock('@line-crm/db', () => dbMocks);
 
@@ -78,6 +81,11 @@ const fakeAccount = {
 
 beforeEach(() => {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
+  // Account creation bootstraps the main traffic pool when absent. Keep this
+  // non-fatal path deterministic so route tests do not hide mock errors.
+  dbMocks.getTrafficPoolBySlug.mockResolvedValue(null);
+  dbMocks.createTrafficPool.mockResolvedValue(undefined);
+  dbMocks.addPoolAccount.mockResolvedValue(undefined);
   lineClientMocks.getFollowersInsight.mockReset();
 });
 

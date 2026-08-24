@@ -143,7 +143,7 @@ export async function getUserFriends(
   userId: string,
 ): Promise<{ id: string; line_user_id: string; display_name: string | null; is_following: number }[]> {
   const result = await db
-    .prepare(`SELECT id, line_user_id, display_name, is_following FROM friends WHERE user_id = ?`)
+    .prepare(`SELECT id, COALESCE(line_platform_user_id, line_user_id) AS line_user_id, display_name, is_following FROM friends WHERE user_id = ?`)
     .bind(userId)
     .all<{ id: string; line_user_id: string; display_name: string | null; is_following: number }>();
   return result.results;

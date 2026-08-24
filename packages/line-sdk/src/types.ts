@@ -25,6 +25,7 @@ export interface TextEventMessage {
   type: 'text';
   id: string;
   text: string;
+  quoteToken?: string;
 }
 
 export interface ImageEventMessage {
@@ -156,6 +157,7 @@ export type FlexContainer = object;
 export interface TextMessage {
   type: 'text';
   text: string;
+  quoteToken?: string;
 }
 
 export interface ImageMessage {

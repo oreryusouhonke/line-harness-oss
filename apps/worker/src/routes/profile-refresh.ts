@@ -31,7 +31,7 @@ profileRefresh.post('/api/admin/refresh-profiles', async (c) => {
   // も含めるか? → 含めない。送信対象だけリフレッシュすれば十分で、ブロック済は
   // どうせ profile API も 403/404 で空振りする。
   const baseQuery = `
-    SELECT f.id, f.line_user_id, f.line_account_id, a.channel_access_token
+    SELECT f.id, COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id, f.line_account_id, a.channel_access_token
     FROM friends f
     LEFT JOIN line_accounts a ON a.id = f.line_account_id
     WHERE f.is_following = 1
