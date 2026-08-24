@@ -79,23 +79,26 @@ function consumeAutoReplyEvidence(
 // upsertChatOnMessage が status を 'unread' に戻すので、除外は自動解除される。
 // 'in_progress' は「まだ対応が終わってない」ので引き続きカウントする。
 const CANDIDATES_SQL = `
-  WITH agg AS (
-    SELECT
-      friend_id,
-      MAX(CASE WHEN direction='incoming' AND (source IS NULL OR source != 'postback') THEN created_at END) AS last_incoming,
-      MAX(CASE WHEN direction='outgoing' AND source='manual' THEN created_at END) AS last_manual,
-      MAX(CASE WHEN direction='outgoing' AND source IN
-          ('auto_reply','automation','automation_backfill','scenario','broadcast')
-        THEN created_at END) AS last_machine
+  WITH last_import AS (
+    SELECT friend_id, MAX(created_at) AS imported_at
     FROM messages_log
+    WHERE source='line_history_import'
     GROUP BY friend_id
   ),
-  latest_chat AS (
-    -- friend ごとの最新 chats 行の status (bare-column + 単一 MAX の argmax)。
-    -- 相関サブクエリだと候補 friend 数ぶん個別 seek になるため一括 GROUP BY で取る。
-    SELECT friend_id, status, MAX(created_at) AS created_at
-    FROM chats
-    GROUP BY friend_id
+  agg AS (
+    SELECT
+      ml.friend_id,
+      MAX(CASE WHEN direction='incoming'
+                AND (source IS NULL OR source NOT IN ('postback','line_history_import'))
+                AND (li.imported_at IS NULL OR ml.created_at > li.imported_at)
+               THEN ml.created_at END) AS last_incoming,
+      MAX(CASE WHEN direction='outgoing' AND source='manual' THEN ml.created_at END) AS last_manual,
+      MAX(CASE WHEN direction='outgoing' AND source IN
+          ('auto_reply','automation','automation_backfill','scenario','broadcast')
+        THEN ml.created_at END) AS last_machine
+    FROM messages_log ml
+    LEFT JOIN last_import li ON li.friend_id = ml.friend_id
+    GROUP BY ml.friend_id
   )
   SELECT
     f.id            AS friend_id,
@@ -125,7 +128,13 @@ const CANDIDATES_SQL = `
 // して bind 変数ゼロで動かす。messages_log は (friend_id, direction, created_at)
 // の index で scan されるので、incoming サブセット取得は十分速い。
 const RECENT_INCOMINGS_SQL = `
-  WITH last_manual AS (
+  WITH last_import AS (
+    SELECT friend_id, MAX(created_at) AS imported_at
+    FROM messages_log
+    WHERE source='line_history_import'
+    GROUP BY friend_id
+  ),
+  last_manual AS (
     SELECT friend_id, MAX(created_at) AS lm
     FROM messages_log
     WHERE direction='outgoing' AND source='manual'
@@ -134,8 +143,10 @@ const RECENT_INCOMINGS_SQL = `
   SELECT ml.friend_id, ml.message_type, ml.content, ml.created_at
   FROM messages_log ml
   LEFT JOIN last_manual lm ON lm.friend_id = ml.friend_id
+  LEFT JOIN last_import li ON li.friend_id = ml.friend_id
   WHERE ml.direction='incoming'
-    AND (ml.source IS NULL OR ml.source != 'postback')
+    AND (ml.source IS NULL OR ml.source NOT IN ('postback','line_history_import'))
+    AND (li.imported_at IS NULL OR ml.created_at > li.imported_at)
     AND (lm.lm IS NULL OR ml.created_at > lm.lm)
   ORDER BY ml.friend_id, ml.created_at DESC
 `;

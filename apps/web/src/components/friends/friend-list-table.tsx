@@ -6,6 +6,7 @@ import type { FriendListItem } from '@/lib/api'
 import { api } from '@/lib/api'
 import FriendListRow from './friend-list-row'
 import TagBadge from './tag-badge'
+import ManagementNicknameEditor from './management-nickname-editor'
 
 interface Props {
   friends: FriendListItem[]
@@ -106,6 +107,15 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
 
                 {isExpanded && (
                   <div className="bg-gray-50 px-6 py-4 border-b border-gray-100 space-y-3">
+                    <div className="max-w-md">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">友だち詳細</p>
+                      <ManagementNicknameEditor
+                        friendId={friend.id}
+                        lineDisplayName={friend.lineDisplayName}
+                        managementNickname={friend.managementNickname}
+                        onSaved={() => onRefresh()}
+                      />
+                    </div>
                     <div>
                       <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
                       <p className="text-xs text-gray-600 font-mono break-all select-all">{friend.lineUserId}</p>

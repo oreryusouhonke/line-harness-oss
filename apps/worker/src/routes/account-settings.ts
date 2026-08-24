@@ -6,6 +6,7 @@ import {
   setTrackedLinkBaseUrl,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { getCouponSaleConfig, saveCouponSaleConfig } from '../services/coupon-sale-automation.js';
 
 const accountSettings = new Hono<Env>();
 
@@ -58,60 +59,21 @@ accountSettings.put('/api/account-settings/test-recipients', async (c) => {
   return c.json({ success: true });
 });
 
-// ── link_base_url (global setting, stored under sentinel '__global__') ─────────
-
-/**
- * GET /api/account-settings/link-base-url
- * Returns the configured short-link base URL (or null if not set).
- */
-accountSettings.get('/api/account-settings/link-base-url', async (c) => {
-  const value = await getLinkBaseUrl(c.env.DB, '__global__');
-  return c.json({ success: true, data: value });
+accountSettings.get('/api/account-settings/coupon-sale-automation', async (c) => {
+  const accountId = c.req.query('accountId');
+  if (!accountId) return c.json({ success: false, error: 'accountId required' }, 400);
+  const config = await getCouponSaleConfig(c.env.DB, accountId);
+  return c.json({ success: true, data: config });
 });
 
-/**
- * PUT /api/account-settings/link-base-url
- * Body: { value: string }
- * - Empty string clears the setting.
- * - Must start with https:// (if non-empty).
- * - Trailing slash is stripped before saving.
- */
-accountSettings.put('/api/account-settings/link-base-url', async (c) => {
-  const body = await c.req
-    .json<{ value?: string }>()
-    .catch((): { value?: string } => ({}));
-  const value = typeof body.value === 'string' ? body.value : '';
-
+accountSettings.put('/api/account-settings/coupon-sale-automation', async (c) => {
+  const body = await c.req.json<{ accountId?: string; config?: unknown }>();
+  if (!body.accountId) return c.json({ success: false, error: 'accountId required' }, 400);
   try {
-    await setLinkBaseUrl(c.env.DB, '__global__', value);
-    return c.json({ success: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Validation error';
-    return c.json({ success: false, error: message }, 400);
-  }
-});
-
-// ── tracked_link_base_url (global setting) ────────────────────────────────────
-// Base domain for message tracked links (/t/<code>). The domain must route
-// /t/* to the Worker (Redirect Rule or Custom Domain). Unset → WORKER_URL.
-
-accountSettings.get('/api/account-settings/tracked-link-base-url', async (c) => {
-  const value = await getTrackedLinkBaseUrl(c.env.DB, '__global__');
-  return c.json({ success: true, data: value });
-});
-
-accountSettings.put('/api/account-settings/tracked-link-base-url', async (c) => {
-  const body = await c.req
-    .json<{ value?: string }>()
-    .catch((): { value?: string } => ({}));
-  const value = typeof body.value === 'string' ? body.value : '';
-
-  try {
-    await setTrackedLinkBaseUrl(c.env.DB, '__global__', value);
-    return c.json({ success: true });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Validation error';
-    return c.json({ success: false, error: message }, 400);
+    const config = await saveCouponSaleConfig(c.env.DB, body.accountId, body.config);
+    return c.json({ success: true, data: config });
+  } catch (error) {
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'invalid config' }, 400);
   }
 });
 

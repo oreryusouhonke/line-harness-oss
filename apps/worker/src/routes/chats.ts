@@ -1,5 +1,4 @@
-import { Hono } from 'hono';
-import { extractFlexAltText } from '../utils/flex-alt-text.js';
+import { Hono, type Context } from 'hono';
 import {
   getOperators,
   getOperatorById,
@@ -15,6 +14,17 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import {
+  ConversationConflictError,
+} from '../services/conversation-control.js';
+import {
+  ConversationNotFoundError,
+  IdempotencyMismatchError,
+  handoffConversation,
+  enqueueHumanReply,
+  returnConversationToBot,
+} from '../services/conversation-control-store.js';
+import { dispatchConversationOutbound } from '../services/conversation-outbound.js';
 
 const chats = new Hono<Env>();
 
@@ -52,6 +62,7 @@ type ChatLike = {
   friend_id: string;
   operator_id: string | null;
   status: string;
+  handling_mode?: 'bot' | 'human';
   notes: string | null;
   last_message_at: string | null;
   created_at: string;
@@ -274,6 +285,7 @@ chats.get('/api/chats', async (c) => {
         SELECT friend_id, MAX(created_at) AS last_message_at
         FROM messages_log
         WHERE (delivery_type IS NULL OR delivery_type != 'test')
+          AND deleted_at IS NULL
           AND ${accountFilterSql}
         GROUP BY friend_id
       ),
@@ -300,12 +312,23 @@ chats.get('/api/chats', async (c) => {
       any_agg AS (
         SELECT friend_id,
           CASE WHEN message_type = 'text' THEN SUBSTR(content, 1, 200) ELSE NULL END AS content,
-          direction, message_type,
-          MAX(created_at) AS created_at
+          direction, message_type, created_at,
+          ROW_NUMBER() OVER (PARTITION BY friend_id ORDER BY created_at DESC) AS rn
+        FROM messages_log
+        WHERE direction = 'incoming'
+          AND deleted_at IS NULL
+          AND (delivery_type IS NULL OR delivery_type != 'test')
+          AND ${accountFilterSql}
+      ),
+      ranked_any AS (
+        SELECT friend_id,
+          CASE WHEN message_type = 'text' THEN SUBSTR(content, 1, 200) ELSE NULL END AS content,
+          direction, message_type, created_at,
+          ROW_NUMBER() OVER (PARTITION BY friend_id ORDER BY created_at DESC) AS rn
         FROM messages_log
         WHERE (delivery_type IS NULL OR delivery_type != 'test')
-          AND friend_id IN (SELECT friend_id FROM page)
-        GROUP BY friend_id
+          AND deleted_at IS NULL
+          AND ${accountFilterSql}
       ),
       recent_msg AS (
         SELECT friend_id, content, direction, message_type, created_at AS preview_at
@@ -315,11 +338,22 @@ chats.get('/api/chats', async (c) => {
         f.id AS id,
         f.id AS friend_id,
         f.display_name,
+        f.management_nickname,
         f.picture_url,
-        f.line_user_id,
+        COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id,
         f.line_account_id,
         c.operator_id,
         COALESCE(c.status, 'resolved') AS status,
+        COALESCE(c.handling_mode, 'bot') AS handling_mode,
+        COALESCE(c.bot_state, 'IDLE') AS bot_state,
+        COALESCE(c.attention_status, 'NONE') AS attention_status,
+        COALESCE(c.priority, 'NORMAL') AS priority,
+        c.assigned_staff_id,
+        c.lock_owner_id,
+        c.lock_expires_at,
+        c.next_action_at,
+        c.last_customer_message_at,
+        COALESCE(c.version, 1) AS version,
         c.notes,
         COALESCE(rm.preview_at, d.last_message_at) AS last_message_at,
         rm.content AS last_message_content,
@@ -336,23 +370,60 @@ chats.get('/api/chats', async (c) => {
       ORDER BY d.last_message_at DESC, d.friend_id DESC
     `;
 
-    // placeholder 順 = SQL 出現順: last_any(account) → deduped 内 chats(account) →
-    // page 条件 → cursor (beforeAt ×2 + beforeId) → LIMIT。
-    // any_agg は page で friend が確定済みのため account filter 不要。
-    const allBindings: unknown[] = [];
-    if (lineAccountId) allBindings.push(lineAccountId, lineAccountId);
-    allBindings.push(...conditionBindings);
-    if (useCursor) allBindings.push(beforeAt, beforeAt, beforeId);
-    allBindings.push(limit);
-    const result = await c.env.DB.prepare(sql).bind(...allBindings).all();
+    if (status) {
+      conditions.push(`COALESCE(c.status, 'resolved') = ?`);
+      bindings.push(status);
+    }
+    if (operatorId) {
+      conditions.push('c.operator_id = ?');
+      bindings.push(operatorId);
+    }
+    if (lineAccountId) {
+      conditions.push('f.line_account_id = ?');
+      bindings.push(lineAccountId);
+    }
 
-    let data = result.results.map((ch: Record<string, unknown>) => ({
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ` ORDER BY
+      CASE
+        WHEN COALESCE(c.status, 'resolved') = 'unread' THEN 0
+        WHEN COALESCE(c.handling_mode, 'bot') = 'human' THEN 1
+        ELSE 2
+      END,
+      d.last_message_at DESC`;
+
+    // CTE 内 placeholder (4 個) → 外側 WHERE placeholder の順に bind する
+    const allBindings = [...ctePrebindings, ...bindings];
+    const stmt = allBindings.length > 0
+      ? c.env.DB.prepare(sql).bind(...allBindings)
+      : c.env.DB.prepare(sql);
+    const result = await stmt.all();
+
+    const candidates = result.results.map((ch: Record<string, unknown>) => ({
+      // 同じ公式アカウントの同一 LINE ユーザーが二重登録されている場合は、一覧上では
+      // 1 会話にまとめる。表示名だけでまとめると同名の別人を混ぜてしまうため、LINE の
+      // 実ユーザー ID をキーにする。
+      identityKey: `${ch.line_account_id || ''}:${ch.line_user_id || ch.friend_id}`,
       id: ch.id as string,
       friendId: ch.friend_id,
       friendName: ch.display_name || '名前なし',
+      lineDisplayName: ch.display_name || null,
+      managementNickname: ch.management_nickname || null,
       friendPictureUrl: ch.picture_url || null,
       operatorId: ch.operator_id,
       status: ch.status,
+      handlingMode: ch.handling_mode || 'bot',
+      botState: ch.bot_state || 'IDLE',
+      attentionStatus: ch.attention_status || 'NONE',
+      priority: ch.priority || 'NORMAL',
+      assignedStaffId: ch.assigned_staff_id || null,
+      lockOwnerId: ch.lock_owner_id || null,
+      lockExpiresAt: ch.lock_expires_at || null,
+      nextActionAt: ch.next_action_at || null,
+      lastCustomerMessageAt: ch.last_customer_message_at || null,
+      version: ch.version || 1,
       notes: ch.notes,
       lastMessageAt: ch.last_message_at,
       lastMessageContent: ch.last_message_content || null,
@@ -362,26 +433,26 @@ chats.get('/api/chats', async (c) => {
       updatedAt: ch.updated_at,
     }));
 
-    if (unansweredMap) {
-      // 未対応 row の preview / timestamp で上書きして Inbox と一貫させる
-      data = data
-        .filter((row) => unansweredMap!.has(row.id as string))
-        .map((row) => {
-          const u = unansweredMap!.get(row.id as string)!;
-          return {
-            ...row,
-            lastMessageAt: u.lastIncomingAt,
-            lastMessageContent: u.lastIncomingType === 'text' ? u.lastIncomingContent : null,
-            lastMessageDirection: 'incoming' as const,
-            lastMessageType: u.lastIncomingType,
-          };
-        })
-        // 上書きで lastMessageAt が変わったので resort
-        .sort((a, b) => {
-          const aAt = typeof a.lastMessageAt === 'string' ? a.lastMessageAt : '';
-          const bAt = typeof b.lastMessageAt === 'string' ? b.lastMessageAt : '';
-          return bAt.localeCompare(aAt);
-        });
+    const byIdentity = new Map<string, (typeof candidates)[number]>();
+    for (const candidate of candidates) {
+      const existing = byIdentity.get(candidate.identityKey);
+      const candidateTime = Date.parse(String(candidate.lastMessageAt || '')) || 0;
+      const existingTime = existing ? Date.parse(String(existing.lastMessageAt || '')) || 0 : -1;
+      if (!existing || candidateTime > existingTime) {
+        // 管理名は重複側にだけ設定済みでも失わないよう引き継ぐ。
+        if (!candidate.managementNickname && existing?.managementNickname) {
+          candidate.managementNickname = existing.managementNickname;
+        }
+        byIdentity.set(candidate.identityKey, candidate);
+      } else if (!existing.managementNickname && candidate.managementNickname) {
+        existing.managementNickname = candidate.managementNickname;
+      }
+    }
+
+    let data = Array.from(byIdentity.values()).map(({ identityKey: _identityKey, ...row }) => row);
+
+    if (unansweredIds) {
+      data = data.filter((row) => unansweredIds!.has(row.id));
     }
 
     return c.json({ success: true, data });
@@ -419,26 +490,48 @@ chats.get('/api/chats/:id', async (c) => {
     const responseId = resolvedFriendId;
     const operatorId = chatRow?.operator_id ?? null;
     const status = chatRow?.status ?? 'resolved';
+    const handlingMode = (chatRow as (typeof chatRow & { handling_mode?: 'bot' | 'human' }))?.handling_mode ?? 'bot';
     const notes = chatRow?.notes ?? null;
     const lastMessageAt = chatRow?.last_message_at ?? null;
     const createdAt = chatRow?.created_at ?? null;
+    const control = chatRow as typeof chatRow & {
+      version?: number; bot_generation?: number; bot_state?: string;
+      attention_status?: string; assigned_staff_id?: string | null;
+      lock_owner_id?: string | null; lock_expires_at?: string | null;
+    };
 
     const friend = await c.env.DB
-      .prepare(`SELECT display_name, picture_url, line_user_id FROM friends WHERE id = ?`)
+      .prepare(`SELECT display_name, management_nickname, picture_url, line_account_id, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id = ?`)
       .bind(resolvedFriendId)
-      .first<{ display_name: string | null; picture_url: string | null; line_user_id: string }>();
+      .first<{ display_name: string | null; management_nickname: string | null; picture_url: string | null; line_account_id: string | null; line_user_id: string }>();
+
+    // 既存データに同一 LINE ユーザーの重複 friend レコードがある場合も、会話履歴は
+    // ひと続きとして表示する。公式アカウントまで一致するものだけを対象にする。
+    const duplicateFriendRows = friend
+      ? await c.env.DB
+        .prepare(
+          `SELECT id FROM friends
+           WHERE line_account_id IS ?
+             AND COALESCE(line_platform_user_id, line_user_id) = ?`,
+        )
+        .bind(friend.line_account_id, friend.line_user_id)
+        .all<{ id: string }>()
+      : { results: [{ id: resolvedFriendId }] };
+    const messageFriendIds = duplicateFriendRows.results.map((row) => row.id);
+    const messageFriendPlaceholders = messageFriendIds.map(() => '?').join(',');
 
     // 新しい1000件を取って昇順に戻す。LIMIT 200 ASC だと古い200件だけで broadcast/scenario 等の
     // 新しい push が欠落していた（Shu で 481件中 281件欠落のバグあり）。一覧側と同様に test 配信は除外。
     // 現状の最重量ユーザー(481件)の2倍バッファ。これ以上の履歴はページング未実装（Phase 2 TODO）。
     const messages = await c.env.DB
       .prepare(
-        `SELECT id, friend_id, direction, message_type, content, created_at
+        `SELECT id, friend_id, direction, message_type, content, source, quote_token, created_at
          FROM messages_log
-         WHERE friend_id = ? AND (delivery_type IS NULL OR delivery_type != 'test')
+         WHERE friend_id IN (${messageFriendPlaceholders})
+           AND deleted_at IS NULL AND (delivery_type IS NULL OR delivery_type != 'test')
          ORDER BY created_at DESC LIMIT 1000`,
       )
-      .bind(resolvedFriendId)
+      .bind(...messageFriendIds)
       .all();
     messages.results = (messages.results as Record<string, unknown>[]).reverse();
 
@@ -448,9 +541,19 @@ chats.get('/api/chats/:id', async (c) => {
         id: responseId,
         friendId: resolvedFriendId,
         friendName: friend?.display_name || '名前なし',
+        lineDisplayName: friend?.display_name || null,
+        managementNickname: friend?.management_nickname || null,
         friendPictureUrl: friend?.picture_url || null,
         operatorId,
         status,
+        handlingMode,
+        version: control?.version ?? 1,
+        botGeneration: control?.bot_generation ?? 0,
+        botState: control?.bot_state ?? 'IDLE',
+        attentionStatus: control?.attention_status ?? 'NONE',
+        assignedStaffId: control?.assigned_staff_id ?? null,
+        lockOwnerId: control?.lock_owner_id ?? null,
+        lockExpiresAt: control?.lock_expires_at ?? null,
         notes,
         lastMessageAt,
         createdAt,
@@ -459,6 +562,8 @@ chats.get('/api/chats/:id', async (c) => {
           direction: m.direction,
           messageType: m.message_type,
           content: m.content,
+          source: m.source || (m.direction === 'incoming' ? 'user' : 'manual'),
+          canQuote: m.direction === 'incoming' && Boolean(m.quote_token) && m.message_type === 'text',
           createdAt: m.created_at,
         })),
       },
@@ -467,6 +572,77 @@ chats.get('/api/chats/:id', async (c) => {
     console.error('GET /api/chats/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
+});
+
+async function handleControlOperation(
+  c: Context<Env>,
+  operation: 'handoff' | 'return',
+) {
+  try {
+    const body = await c.req.json<{
+      expectedVersion: number;
+      idempotencyKey: string;
+      reason?: string;
+      notifyCustomer?: boolean;
+    }>();
+    if (!Number.isInteger(body.expectedVersion) || body.expectedVersion < 1) {
+      return c.json({ success: false, error: { code: 'invalid_expected_version', message: 'expectedVersion is required' } }, 400);
+    }
+    if (!body.idempotencyKey || body.idempotencyKey.length > 200) {
+      return c.json({ success: false, error: { code: 'invalid_idempotency_key', message: 'idempotencyKey is required' } }, 400);
+    }
+    const staff = c.get('staff');
+    const input = {
+      expectedVersion: body.expectedVersion,
+      idempotencyKey: body.idempotencyKey,
+      reason: body.reason?.trim() || (operation === 'handoff' ? 'manual_handoff' : 'manual_return_to_bot'),
+      actorType: 'STAFF' as const,
+      actorId: staff.id,
+      notifyCustomer: body.notifyCustomer,
+    };
+    const result = operation === 'handoff'
+      ? await handoffConversation(c.env.DB, c.req.param('id')!, input)
+      : await returnConversationToBot(c.env.DB, c.req.param('id')!, input);
+    let delivery = null;
+    if (result.queuedMessageId) {
+      delivery = await dispatchConversationOutbound(c.env.DB, result.queuedMessageId, c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    }
+    return c.json({ success: true, data: { ...result, delivery } });
+  } catch (error) {
+    if (error instanceof ConversationNotFoundError) {
+      return c.json({ success: false, error: { code: 'not_found', message: 'Conversation not found' } }, 404);
+    }
+    if (error instanceof ConversationConflictError) {
+      return c.json({ success: false, error: { code: 'version_conflict', message: 'Conversation changed', currentVersion: error.currentVersion } }, 409);
+    }
+    if (error instanceof IdempotencyMismatchError) {
+      return c.json({ success: false, error: { code: 'idempotency_conflict', message: error.message } }, 409);
+    }
+    console.error(`POST conversation ${operation} error:`, error);
+    return c.json({ success: false, error: { code: 'internal_error', message: 'Internal server error' } }, 500);
+  }
+}
+
+chats.post('/api/conversations/:id/handoff', (c) => handleControlOperation(c, 'handoff'));
+chats.post('/api/conversations/:id/return-to-bot', (c) => handleControlOperation(c, 'return'));
+
+chats.get('/api/conversations/retention/dry-run', async (c) => {
+  const before = c.req.query('before') || new Date().toISOString();
+  const rows = await c.env.DB.prepare(
+    `SELECT contains_sensitive_data, access_level, COUNT(*) AS count
+       FROM messages_log
+      WHERE retention_expires_at IS NOT NULL AND retention_expires_at <= ?
+      GROUP BY contains_sensitive_data, access_level`,
+  ).bind(before).all<{ contains_sensitive_data: number; access_level: string; count: number }>();
+  return c.json({
+    success: true,
+    data: {
+      dryRun: true,
+      before,
+      total: rows.results.reduce((sum, row) => sum + Number(row.count), 0),
+      groups: rows.results,
+    },
+  });
 });
 
 chats.post('/api/chats', async (c) => {
@@ -551,51 +727,85 @@ chats.post('/api/chats/:id/send', async (c) => {
     const chat = await resolveOrCreateChat(c.env.DB, chatId);
     if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);
 
-    const body = await c.req.json<{ messageType?: string; content: string }>();
+    const body = await c.req.json<{
+      messageType?: 'text' | 'flex' | 'image';
+      content: string;
+      expectedVersion?: number;
+      idempotencyKey?: string;
+      quoteMessageId?: string;
+    }>();
     if (!body.content) return c.json({ success: false, error: 'content is required' }, 400);
-
-    const { friend, accessToken } = await resolveFriendAndAccessToken(
-      c.env.DB,
-      chat.friend_id,
-      c.env.LINE_CHANNEL_ACCESS_TOKEN,
-    );
-    if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
-
-    // LINE APIでメッセージ送信
-    const { LineClient } = await import('@line-crm/line-sdk');
-    const lineClient = new LineClient(accessToken);
-    const messageType = body.messageType ?? 'text';
-
-    if (messageType === 'text') {
-      await lineClient.pushTextMessage(friend.line_user_id, body.content);
-    } else if (messageType === 'flex') {
-      const contents = JSON.parse(body.content);
-      await lineClient.pushFlexMessage(friend.line_user_id, extractFlexAltText(contents), contents);
-    } else if (messageType === 'image') {
-      const parsed = JSON.parse(body.content) as {
-        originalContentUrl: string;
-        previewImageUrl: string;
-      };
-      await lineClient.pushImageMessage(
-        friend.line_user_id,
-        parsed.originalContentUrl,
-        parsed.previewImageUrl,
-      );
+    if (!Number.isInteger(body.expectedVersion) || (body.expectedVersion ?? 0) < 1 || !body.idempotencyKey) {
+      return c.json({ success: false, error: { code: 'safe_send_fields_required', message: 'expectedVersion and idempotencyKey are required' } }, 400);
     }
-
-    // メッセージログに記録
-    const logId = crypto.randomUUID();
-    await c.env.DB
-      .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, source, created_at) VALUES (?, ?, 'outgoing', ?, ?, 'manual', ?)`)
-      .bind(logId, friend.id, messageType, body.content, jstNow())
-      .run();
-
-    // チャットの最終メッセージ日時を更新（chat.id を直接使う — friend_id で呼ばれても resolveOrCreateChat 済み）
-    await updateChat(c.env.DB, chat.id, { status: 'in_progress', lastMessageAt: jstNow() });
-
-    return c.json({ success: true, data: { sent: true, messageId: logId } });
+    const staff = c.get('staff');
+    let quoteToken: string | undefined;
+    if (body.quoteMessageId) {
+      if ((body.messageType ?? 'text') !== 'text') {
+        return c.json({ success: false, error: { code: 'quote_text_only', message: 'Quoted replies must be text messages' } }, 400);
+      }
+      const quoteTarget = await c.env.DB.prepare(
+        `SELECT quote_token FROM messages_log
+          WHERE id = ? AND friend_id = ? AND deleted_at IS NULL AND quote_token IS NOT NULL`,
+      ).bind(body.quoteMessageId, chat.friend_id).first<{ quote_token: string }>();
+      if (!quoteTarget?.quote_token) {
+        return c.json({ success: false, error: { code: 'quote_target_unavailable', message: 'Quote target is unavailable' } }, 400);
+      }
+      quoteToken = quoteTarget.quote_token;
+    }
+    const queued = await enqueueHumanReply(c.env.DB, chat.id, {
+      expectedVersion: body.expectedVersion!,
+      idempotencyKey: body.idempotencyKey,
+      reason: 'manual_message',
+      actorType: 'STAFF',
+      actorId: staff.id,
+      staffId: staff.id,
+      messageType: body.messageType ?? 'text',
+      content: body.content,
+      quoteToken,
+      notifyCustomer: true,
+    });
+    if (queued.noticeMessageId) {
+      await dispatchConversationOutbound(c.env.DB, queued.noticeMessageId, c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    }
+    const delivery = await dispatchConversationOutbound(c.env.DB, queued.messageId, c.env.LINE_CHANNEL_ACCESS_TOKEN);
+    if (delivery.status !== 'SENT') {
+      return c.json({ success: false, error: { code: 'delivery_failed', message: delivery.reason || delivery.status } }, 502);
+    }
+    return c.json({ success: true, data: { sent: true, messageId: queued.messageId, version: queued.version, replayed: queued.replayed } });
   } catch (err) {
+    if (err instanceof ConversationConflictError) {
+      return c.json({ success: false, error: { code: 'version_or_lock_conflict', currentVersion: err.currentVersion } }, 409);
+    }
     console.error('POST /api/chats/:id/send error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// Harness上だけ非表示にする論理削除。LINE側の送信取消はMessaging APIでは不可。
+chats.delete('/api/chats/:id/messages/:messageId', async (c) => {
+  try {
+    const chat = await resolveOrCreateChat(c.env.DB, c.req.param('id'));
+    if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);
+    const staff = c.get('staff');
+    const messageId = c.req.param('messageId');
+    const now = new Date().toISOString();
+    const result = await c.env.DB.prepare(
+      `UPDATE messages_log
+          SET deleted_at = ?, deleted_by = ?
+        WHERE id = ? AND friend_id = ? AND direction = 'outgoing' AND deleted_at IS NULL`,
+    ).bind(now, staff.id, messageId, chat.friend_id).run();
+    if (Number(result.meta.changes ?? 0) !== 1) {
+      return c.json({ success: false, error: { code: 'not_deletable', message: 'Message not found or cannot be deleted' } }, 404);
+    }
+    await c.env.DB.prepare(
+      `INSERT INTO conversation_audit_logs
+       (id, conversation_id, action, actor_type, actor_id, request_id, metadata, created_at)
+       VALUES (?, ?, 'MESSAGE_HIDDEN', 'STAFF', ?, ?, ?, ?)`,
+    ).bind(crypto.randomUUID(), chat.id, staff.id, crypto.randomUUID(), JSON.stringify({ messageId }), now).run();
+    return c.json({ success: true, data: { messageId, deleted: true } });
+  } catch (err) {
+    console.error('DELETE chat message error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

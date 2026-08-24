@@ -231,6 +231,8 @@ async function processSingleDelivery(
   },
   workerUrl?: string,
 ): Promise<boolean> {
+  const { isConversationHumanControlled } = await import('./conversation-automation-guard.js');
+  if (await isConversationHumanControlled(db, fs.friend_id)) return false;
   // Optimistic lock: claim this delivery (prevents duplicate sends from parallel workers)
   const claimed = await claimFriendScenarioForDelivery(db, fs.id, fs.current_step_order);
   if (!claimed) return false;

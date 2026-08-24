@@ -251,8 +251,10 @@ async function executeAction(
 
     case 'send_message': {
       if (!lineAccessToken || !friendId) break;
+      const { isConversationHumanControlled } = await import('./conversation-automation-guard.js');
+      if (await isConversationHumanControlled(db, friendId)) break;
       const friend = await db
-        .prepare('SELECT line_user_id FROM friends WHERE id = ?')
+        .prepare('SELECT COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id = ?')
         .bind(friendId)
         .first<{ line_user_id: string }>();
       if (!friend) break;
@@ -346,7 +348,7 @@ async function executeAction(
     case 'switch_rich_menu': {
       if (!lineAccessToken || !friendId) break;
       const friend = await db
-        .prepare('SELECT line_user_id FROM friends WHERE id = ?')
+        .prepare('SELECT COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id = ?')
         .bind(friendId)
         .first<{ line_user_id: string }>();
       if (!friend) break;
@@ -358,7 +360,7 @@ async function executeAction(
     case 'remove_rich_menu': {
       if (!lineAccessToken || !friendId) break;
       const friend = await db
-        .prepare('SELECT line_user_id FROM friends WHERE id = ?')
+        .prepare('SELECT COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id = ?')
         .bind(friendId)
         .first<{ line_user_id: string }>();
       if (!friend) break;

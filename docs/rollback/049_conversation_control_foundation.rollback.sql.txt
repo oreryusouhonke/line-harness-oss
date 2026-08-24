@@ -1,0 +1,9 @@
+-- Logical rollback only. Deploy the previous Worker first.
+-- SQLite/D1 cannot safely remove additive columns without rebuilding chats.
+-- The previous Worker ignores all columns and tables added by migration 049.
+DROP TABLE IF EXISTS line_webhook_events;
+DROP TABLE IF EXISTS conversation_outbound_messages;
+DROP TABLE IF EXISTS conversation_audit_logs;
+DROP TABLE IF EXISTS conversation_state_transitions;
+DROP TABLE IF EXISTS conversation_operation_keys;
+

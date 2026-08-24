@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
-import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import {
@@ -22,6 +21,7 @@ import {
 import { getSnapshot, type D1Like, type SnapshotRow } from '../src/snapshot.js';
 import { decodeWorkerSnapshot } from '../src/phases/rollback.js';
 import type { UpdateContext, ReleaseEntry, CurrentVersion, CfApiCreds } from '../src/types.js';
+import { createFixtureTarball } from './fixture-tar.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -91,7 +91,7 @@ interface Fixture {
   liffHash: string;
 }
 
-function buildFixture(): Fixture {
+async function buildFixture(): Promise<Fixture> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'update-engine-orch-'));
   const stageDir = join(tmpDir, 'stage');
   mkdirSync(stageDir);
@@ -118,10 +118,12 @@ function buildFixture(): Fixture {
   writeFileSync(join(migrationsDir, '041_x.sql'), migration);
 
   const tarball = join(tmpDir, 'bundle.tar.gz');
-  execSync(`tar czf ${tarball} -C ${stageDir} worker admin liff migrations`, {
-    stdio: 'pipe',
-    env: { ...process.env, COPYFILE_DISABLE: '1' },
-  });
+  await createFixtureTarball(tarball, new Map([
+    ['worker/index.js', workerBytes],
+    ['admin/index.html', adminIndex],
+    ['liff/index.html', liffIndex],
+    ['migrations/041_x.sql', migration],
+  ]));
 
   const tarballBytes = readFileSync(tarball);
 
@@ -481,8 +483,8 @@ describe('runUpdate orchestrator', () => {
   const originalFetch = globalThis.fetch;
   let fixture: Fixture;
 
-  beforeAll(() => {
-    fixture = buildFixture();
+  beforeAll(async () => {
+    fixture = await buildFixture();
   });
 
   afterAll(() => {

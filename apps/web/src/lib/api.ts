@@ -174,107 +174,20 @@ export type FriendListParams = {
   handled?: 'unhandled'
 }
 
-export type FriendWithTags = Friend & { tags: Tag[] }
-export type FollowerImportState = {
-  version: 1
-  capability: 'unknown' | 'available' | 'unavailable'
-  phase: 'not_started' | 'importing_ids' | 'hydrating_profiles' | 'completed'
-  eligibilityCheckedAt: string | null
-  startedAt: string | null
-  completedAt: string | null
-  updatedAt: string
-  received: number
-  imported: number
-  reactivated: number
-  claimedUnassigned: number
-  alreadyPresent: number
-  conflicts: number
-  invalid: number
-  profilesProcessed: number
-  profilesUpdated: number
-  profileErrors: number
-  lastError: string | null
+// Keep the nickname fields explicit while older generated shared-package
+// declarations may still be present in a developer's node_modules cache.
+export type FriendWithTags = Friend & {
+  tags: Tag[]
+  lineDisplayName: string | null
+  managementNickname: string | null
 }
-export type FriendFormSubmission = {
+export type FriendNicknameHistory = {
   id: string
-  formId: string
-  formName: string
-  fields: Array<{ name: string; label: string }>
-  data: Record<string, unknown>
-  createdAt: string
-}
-export type FriendDetail = FriendWithTags & { formSubmissions: FriendFormSubmission[] }
-export type MileageSummary = {
-  programId: string
-  programName: string
-  available: number
-  pending: number
-  lifetimeEarned: number
-  spent: number
-}
-export type MileageHistoryItem = {
-  id: string
-  entryType: 'grant' | 'reversal' | 'spend' | 'expiration' | 'adjustment'
-  status: 'pending' | 'available' | 'void'
-  amount: number
-  reason: string
-  source: string
-  sourceEventId: string | null
-  occurredAt: string
-}
-export type MileageRule = {
-  id: string
-  name: string
-  eventType: string
-  source: string | null
-  amount: number
-  initialStatus: 'pending' | 'available'
-  conditions: {
-    dailyCapActions?: number
-    uniquePerSubject?: boolean
-    uniquePerSubjectPerDay?: boolean
-    ignoreMultiplier?: boolean
-    beneficiary?: 'actor' | 'referrer'
-    uniquePerReferredFriend?: boolean
-    uniquePerReferredFriendPerSubject?: boolean
-  }
-  isActive: boolean
-  createdAt: string
-  updatedAt: string
-}
-export type MileageAdminMember = {
-  identityKey: string
-  primaryFriendId: string
-  displayName: string
-  pictureUrl: string | null
-  accountCount: number
-  accountNames: string[]
-  available: number
-  pending: number
-  lifetimeEarned: number
-  actionCount: number
-  messageCount: number
-  linkClickCount: number
-  formCount: number
-  bookingCount: number
-  webinarCount: number
-  instagramCount: number
-  followingDays: number
-  unfollowCount: number
-  referralMiles: number
-  qualityReferralCount: number
-  lastActivityAt: string | null
-}
-export type MileageAdminOverview = {
-  summary: {
-    totalMembers: number
-    totalAvailable: number
-    activeMembers30d: number
-    totalActions: number
-    queuedEvents: number
-  }
-  members: MileageAdminMember[]
-  pagination: { total: number; limit: number; offset: number }
+  previousNickname: string | null
+  newNickname: string | null
+  changedByStaffId: string
+  changedByName: string
+  changedAt: string
 }
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
@@ -310,11 +223,14 @@ export const api = {
       )
     },
     get: (id: string) =>
-      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}`),
-    mileage: (id: string, limit = 10) =>
-      fetchApi<ApiResponse<{ summary: MileageSummary; history: MileageHistoryItem[] }>>(
-        `/api/friends/${id}/mileage?limit=${limit}`,
-      ),
+      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`),
+    updateManagementNickname: (id: string, nickname: string | null) =>
+      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}/management-nickname`, {
+        method: 'PUT',
+        body: JSON.stringify({ nickname }),
+      }),
+    nicknameHistory: (id: string) =>
+      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/nickname-history`),
     count: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<{ count: number }>>('/api/friends/count' + query)
@@ -980,10 +896,24 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    send: (id: string, data: { content: string; messageType?: string }) =>
-      fetchApi<ApiResponse<unknown>>(`/api/chats/${id}/send`, {
+    send: (id: string, data: { content: string; messageType?: string; expectedVersion: number; idempotencyKey: string; quoteMessageId?: string }) =>
+      fetchApi<ApiResponse<{ sent: boolean; messageId: string; version: number; replayed: boolean }>>(`/api/chats/${id}/send`, {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    deleteMessage: (id: string, messageId: string) =>
+      fetchApi<ApiResponse<{ messageId: string; deleted: boolean }>>(`/api/chats/${id}/messages/${messageId}`, {
+        method: 'DELETE',
+      }),
+    handoff: (id: string, expectedVersion: number, idempotencyKey: string, reason = 'manual_handoff') =>
+      fetchApi<ApiResponse<{ mode: 'human'; version: number; botGeneration: number }>>(`/api/conversations/${id}/handoff`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion, idempotencyKey, reason, notifyCustomer: true }),
+      }),
+    returnToBot: (id: string, expectedVersion: number, idempotencyKey: string, reason = 'manual_return_to_bot') =>
+      fetchApi<ApiResponse<{ mode: 'bot'; version: number; botGeneration: number }>>(`/api/conversations/${id}/return-to-bot`, {
+        method: 'POST',
+        body: JSON.stringify({ expectedVersion, idempotencyKey, reason, notifyCustomer: true }),
       }),
   },
   reminders: {

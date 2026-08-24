@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';
 import { getFriendById, getLineAccountById } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared';
 
 const richMenus = new Hono<Env>();
 
@@ -31,9 +32,9 @@ richMenus.get('/api/rich-menus', async (c) => {
 // POST /api/rich-menus — create a rich menu via LINE API
 richMenus.post('/api/rich-menus', async (c) => {
   try {
-    const body = await c.req.json();
+    const body = await c.req.json<Record<string, unknown>>();
     const lineClient = await resolveLineClient(c);
-    const result = await lineClient.createRichMenu(body);
+    const result = await lineClient.createRichMenu({ ...body, chatBarText: RICH_MENU_CHAT_BAR_TEXT } as never);
     return c.json({ success: true, data: result }, 201);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -3,10 +3,12 @@ import { Hono } from 'hono';
 import { richMenus } from './rich-menus.js';
 
 const uploadRichMenuImage = vi.fn();
+const createRichMenu = vi.fn();
 
 vi.mock('@line-crm/line-sdk', () => ({
   LineClient: vi.fn().mockImplementation(() => ({
     uploadRichMenuImage,
+    createRichMenu,
   })),
 }));
 
@@ -25,6 +27,25 @@ describe('POST /api/rich-menus/:id/image', () => {
   beforeEach(() => {
     uploadRichMenuImage.mockReset();
     uploadRichMenuImage.mockResolvedValue(undefined);
+    createRichMenu.mockReset();
+    createRichMenu.mockResolvedValue({ richMenuId: 'new-menu' });
+  });
+
+  test('forces the canonical chatBarText when creating through the legacy endpoint', async () => {
+    const app = setupApp();
+    const res = await app.request('/api/rich-menus', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test', selected: false, chatBarText: '旧文言',
+        size: { width: 2500, height: 843 }, areas: [],
+      }),
+    }, { LINE_CHANNEL_ACCESS_TOKEN: 'token', DB: {} as D1Database });
+
+    expect(res.status).toBe(201);
+    expect(createRichMenu).toHaveBeenCalledWith(expect.objectContaining({
+      chatBarText: '←ここから入力できます',
+    }));
   });
 
   test('accepts SDK imageData JSON field for base64 uploads', async () => {

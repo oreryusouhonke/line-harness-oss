@@ -9,11 +9,16 @@ export type ImageUploaderValue =
   | { mode: 'url'; url: string }
   | { mode: 'line-image'; originalContentUrl: string; previewImageUrl: string }
 
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+const LINE_TARGET_BYTES = 900 * 1024
+
 export interface ImageUploaderProps {
   mode: ImageUploaderMode
   value: ImageUploaderValue | null
   onChange: (next: ImageUploaderValue | null) => void
   label?: string
+  compact?: boolean
+  variant?: 'default' | 'composer'
 }
 
 /**
@@ -23,11 +28,44 @@ export interface ImageUploaderProps {
  * mode='line-image' は {originalContentUrl, previewImageUrl} を返す (Broadcast / Auto-reply / Template / Chats)。
  * 初版は preview = original の同 URL。後段で本格 resize が必要になれば worker 側で対応。
  */
-export default function ImageUploader({ mode, value, onChange, label }: ImageUploaderProps) {
+export default function ImageUploader({ mode, value, onChange, label, compact = false, variant = 'default' }: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [manualUrlMode, setManualUrlMode] = useState(false)
+
+  const prepareLineImage = useCallback(async (file: File): Promise<File> => {
+    if (file.size <= LINE_TARGET_BYTES) return file
+
+    const bitmap = await createImageBitmap(file)
+    try {
+      let scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height))
+      let quality = 0.86
+
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const width = Math.max(1, Math.round(bitmap.width * scale))
+        const height = Math.max(1, Math.round(bitmap.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('canvas unavailable')
+        ctx.drawImage(bitmap, 0, 0, width, height)
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+        if (!blob) throw new Error('image resize failed')
+        if (blob.size <= LINE_TARGET_BYTES || attempt === 7) {
+          const name = file.name.replace(/\.[^.]+$/, '') || 'image'
+          return new File([blob], `${name}.jpg`, { type: 'image/jpeg' })
+        }
+        if (quality > 0.62) quality -= 0.08
+        else scale *= 0.82
+      }
+    } finally {
+      bitmap.close()
+    }
+
+    return file
+  }, [])
 
   const upload = useCallback(
     async (file: File) => {
@@ -39,18 +77,15 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
         setError('LINE 送信用は JPEG または PNG のみ対応')
         return
       }
-      if (mode === 'line-image' && file.size > 1024 * 1024) {
-        setError('LINE 送信用は 1MB 以下にしてください (preview サイズ制限)')
-        return
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        setError('10MB 以下にしてください')
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError('20MB 以下にしてください')
         return
       }
       setBusy(true)
       setError('')
       try {
-        const res = await api.uploads.image(file)
+        const uploadFile = mode === 'line-image' ? await prepareLineImage(file) : file
+        const res = await api.uploads.image(uploadFile)
         if (!res.success) {
           setError(res.error ?? 'アップロード失敗')
           return
@@ -67,7 +102,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
         setBusy(false)
       }
     },
-    [mode, onChange],
+    [mode, onChange, prepareLineImage],
   )
 
   const handleFiles = useCallback(
@@ -102,8 +137,53 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
         ? value.url
         : value.previewImageUrl
 
+  if (variant === 'composer') {
+    return (
+      <div
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+        onPaste={onPaste}
+        tabIndex={0}
+        className="flex shrink-0 items-center gap-2 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      >
+        {previewUrl ? (
+          <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={previewUrl} alt="" className="h-8 w-8 rounded object-cover ring-1 ring-emerald-200" />
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="text-xs font-medium text-rose-600 hover:underline"
+            >
+              取消
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+            aria-label="画像を追加"
+            title="画像を追加。ドラッグ&ドロップや貼り付けもできます"
+            className="h-10 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {busy ? '処理中' : '画像'}
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept={mode === 'line-image' ? 'image/jpeg,image/png' : 'image/*'}
+          className="hidden"
+          onChange={(e) => handleFiles(e.target.files)}
+        />
+        {error && <div className="text-xs text-rose-600">{error}</div>}
+      </div>
+    )
+  }
+
   return (
-    <div className="space-y-2">
+    <div className={compact ? 'space-y-1' : 'space-y-2'}>
       {label && <div className="text-sm font-medium text-gray-700">{label}</div>}
       <div className="flex justify-end">
         <button
@@ -145,12 +225,12 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
           onDrop={onDrop}
           onPaste={onPaste}
           tabIndex={0}
-          className="rounded-lg border-2 border-dashed border-gray-300 bg-white p-4 transition-colors hover:border-gray-400 focus:border-emerald-500 focus:outline-none"
+          className={`rounded-lg border-2 border-dashed border-gray-300 bg-white transition-colors hover:border-gray-400 focus:border-emerald-500 focus:outline-none ${compact ? 'px-3 py-2' : 'p-4'}`}
         >
           {previewUrl ? (
             <div className="flex items-center gap-3">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={previewUrl} alt="" className="h-24 w-24 rounded object-cover ring-1 ring-gray-200" />
+              <img src={previewUrl} alt="" className={`${compact ? 'h-12 w-12' : 'h-24 w-24'} rounded object-cover ring-1 ring-gray-200`} />
               <div className="flex-1 space-y-2">
                 <button
                   type="button"
@@ -169,7 +249,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2 py-4 text-sm text-gray-500">
+            <div className={`flex items-center justify-center text-sm text-gray-500 ${compact ? 'gap-3 py-1' : 'flex-col gap-2 py-4'}`}>
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
@@ -178,7 +258,7 @@ export default function ImageUploader({ mode, value, onChange, label }: ImageUpl
               >
                 {busy ? 'アップロード中…' : '📎 画像を選択'}
               </button>
-              <div className="text-xs text-gray-400">またはドラッグ&ドロップ / Cmd+V でペースト</div>
+              <div className={`text-xs text-gray-400 ${compact ? 'hidden sm:block' : ''}`}>またはドラッグ&ドロップ / Cmd+V でペースト</div>
             </div>
           )}
           <input

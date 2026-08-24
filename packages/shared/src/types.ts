@@ -15,8 +15,12 @@ export interface Friend {
   id: string;
   /** LINE ユーザーID */
   lineUserId: string;
-  /** 表示名 */
+  /** 管理画面での優先表示名 (管理用ニックネーム > LINE表示名) */
   displayName: string;
+  /** LINE本人が設定した表示名。管理用ニックネームとは別に保持する */
+  lineDisplayName: string | null;
+  /** 管理画面内だけで使うニックネーム */
+  managementNickname: string | null;
   /** プロフィール画像URL */
   pictureUrl: string | null;
   /** ステータスメッセージ */

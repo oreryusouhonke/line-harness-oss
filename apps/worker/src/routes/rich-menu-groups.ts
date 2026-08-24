@@ -1,4 +1,5 @@
 import { Hono, type Context } from 'hono';
+import { RICH_MENU_CHAT_BAR_TEXT } from '@line-crm/shared';
 import {
   getRichMenuGroups,
   getRichMenuGroupById,
@@ -216,7 +217,7 @@ function parseCreateBody(raw: unknown): Parsed<CreateRichMenuGroupInput> {
     value: {
       accountId: r.accountId,
       name: r.name,
-      chatBarText: r.chatBarText,
+      chatBarText: RICH_MENU_CHAT_BAR_TEXT,
       size: r.size as 'large' | 'compact',
       selected: r.selected === true,
       pages: pages.value,
@@ -236,7 +237,7 @@ function parsePatchBody(raw: unknown): Parsed<{ meta: UpdateRichMenuGroupMetaInp
     if (typeof r.chatBarText !== 'string' || r.chatBarText.length === 0 || r.chatBarText.length > 14) {
       return { ok: false, error: 'chatBarText must be 1..14 chars' };
     }
-    meta.chatBarText = r.chatBarText;
+    meta.chatBarText = RICH_MENU_CHAT_BAR_TEXT;
   }
   if (r.isDefaultForAll !== undefined) {
     if (typeof r.isDefaultForAll !== 'boolean') return { ok: false, error: 'isDefaultForAll must be boolean' };
@@ -426,7 +427,7 @@ richMenuGroups.post('/api/rich-menu-groups/import', async (c) => {
   const created = await createRichMenuGroup(c.env.DB, {
     accountId,
     name: detail.name,
-    chatBarText: detail.chatBarText,
+    chatBarText: RICH_MENU_CHAT_BAR_TEXT,
     size,
     selected: detail.selected,
     pages: [

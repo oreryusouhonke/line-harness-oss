@@ -130,6 +130,41 @@ export function checkMigration(sql: string): CheckResult {
 
 const DEFAULT_MIGRATIONS_DIR = 'packages/db/migrations';
 
+// These collisions predate the uniqueness policy and may refer to migrations
+// already recorded by filename in deployed databases. Do not rename them.
+// Any new collision, or any addition to one of these groups, is rejected.
+export const GRANDFATHERED_DUPLICATE_PREFIXES: Readonly<Record<string, readonly string[]>> = {
+  '009': ['009_delivery_type.sql', '009_token_expiry.sql'],
+  '018': ['018_broadcast_queue.sql', '018_message_templates.sql'],
+  '031': ['031_batch_lock_at.sql', '031_iemoto_bot.sql'],
+  '032': ['032_iemoto_voice.sql', '032_messages_log_line_account_id.sql'],
+  '037': ['037_event_booking.sql', '037_scenario_delivery_mode.sql'],
+  '038': ['038_entry_routes_pool_and_push.sql', '038_scenario_templates_and_stats.sql'],
+  '041': ['041_account_og_defaults.sql', '041_event_custom_messages.sql', '041_update_history.sql'],
+};
+
+export function findDuplicateMigrationPrefixViolations(names: string[]): string[] {
+  const groups = new Map<string, string[]>();
+  for (const name of names) {
+    const match = name.match(/^(\d+)_.*\.sql$/);
+    if (!match) continue;
+    const group = groups.get(match[1]) ?? [];
+    group.push(name);
+    groups.set(match[1], group);
+  }
+
+  const violations: string[] = [];
+  for (const [prefix, group] of groups) {
+    if (group.length < 2) continue;
+    const actual = [...group].sort();
+    const allowed = GRANDFATHERED_DUPLICATE_PREFIXES[prefix];
+    if (!allowed || actual.join('\0') !== [...allowed].sort().join('\0')) {
+      violations.push(`duplicate migration prefix ${prefix}: ${actual.join(', ')}`);
+    }
+  }
+  return violations.sort();
+}
+
 /**
  * The additive-only Migration Policy (CONTRIBUTING.md) is forward-looking:
  * it applies to migrations numbered >= this prefix. Earlier migrations have
@@ -174,6 +209,17 @@ function main(rawArgs: string[]): void {
 
   const usingDefaults = fileArgs.length === 0;
   const files = usingDefaults ? listDefaultMigrations({ all }) : fileArgs;
+
+  if (usingDefaults) {
+    const allNames = readdirSync(resolve(DEFAULT_MIGRATIONS_DIR))
+      .filter((f) => f.endsWith('.sql'));
+    const duplicateViolations = findDuplicateMigrationPrefixViolations(allNames);
+    if (duplicateViolations.length > 0) {
+      for (const violation of duplicateViolations) stdout.write(`[FAIL] ${violation}\n`);
+      stdout.write(`\n${duplicateViolations.length} migration prefix collision(s) found.\n`);
+      exit(1);
+    }
+  }
 
   if (usingDefaults) {
     stdout.write(

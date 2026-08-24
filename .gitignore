@@ -18,6 +18,10 @@ dist-mcp/
 .dev.vars.*
 apps/web/out/
 apps/worker/dist/
+artifacts/
+apps/worker/artifacts/
+apps/web/.next-build-conflict-*/
+*.tsbuildinfo
 .worktrees/
 .claude/worktrees/
 .line-harness-setup.json

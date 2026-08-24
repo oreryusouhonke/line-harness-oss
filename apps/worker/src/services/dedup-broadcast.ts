@@ -108,8 +108,7 @@ export async function computeDedupBroadcastPreview(
     WITH selected AS (
       SELECT
         f.id            AS friend_id,
-        f.line_user_id,
-        f.display_name,
+        COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id,
         f.line_account_id,
         f.created_at,
         COALESCE(${URL_TOKEN_SQL}, 'uid:'||f.user_id, 'solo:'||f.id) AS ident_key

@@ -143,6 +143,9 @@ describe('publishRichMenuGroup', () => {
       'create', 'upload', 'delete-alias', 'create-alias', 'delete-old', 'get-default',
     ]);
     expect(line.calls).not.toContain('clear-default');
+    expect(line.createRichMenu).toHaveBeenCalledWith(expect.objectContaining({
+      chatBarText: '←ここから入力できます',
+    }));
     expect(result.pages).toEqual([{ pageId: 'p1', newRichMenuId: 'lm-1' }]);
   });
 

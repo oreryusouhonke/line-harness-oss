@@ -3,6 +3,7 @@ import {
   POLICY_CUTOFF_PREFIX,
   checkMigration,
   filterMigrationsByPolicy,
+  findDuplicateMigrationPrefixViolations,
 } from './check-migrations';
 
 describe('checkMigration', () => {
@@ -124,6 +125,35 @@ describe('checkMigration', () => {
     const sql = `drop table foo;`;
     const result = checkMigration(sql);
     expect(result.ok).toBe(false);
+  });
+});
+
+describe('findDuplicateMigrationPrefixViolations', () => {
+  it('allows the exact grandfathered duplicate groups', () => {
+    expect(findDuplicateMigrationPrefixViolations([
+      '009_delivery_type.sql',
+      '009_token_expiry.sql',
+      '041_account_og_defaults.sql',
+      '041_event_custom_messages.sql',
+      '041_update_history.sql',
+    ])).toEqual([]);
+  });
+
+  it('rejects a new duplicate prefix', () => {
+    expect(findDuplicateMigrationPrefixViolations([
+      '053_first.sql',
+      '053_second.sql',
+    ])).toEqual([
+      'duplicate migration prefix 053: 053_first.sql, 053_second.sql',
+    ]);
+  });
+
+  it('rejects adding a file to a grandfathered group', () => {
+    expect(findDuplicateMigrationPrefixViolations([
+      '009_delivery_type.sql',
+      '009_token_expiry.sql',
+      '009_unexpected.sql',
+    ])[0]).toMatch(/duplicate migration prefix 009/);
   });
 });
 

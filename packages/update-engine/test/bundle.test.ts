@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   mkdirSync,
@@ -16,6 +15,7 @@ import {
   verifyBundleHashes,
   assertHashesMatch,
 } from '../src/bundle.js';
+import { createFixtureTarball } from './fixture-tar.js';
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ interface Fixture {
   migration: Buffer;
 }
 
-function buildFixture(): Fixture {
+async function buildFixture(): Promise<Fixture> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'update-engine-bundle-'));
   const stageDir = join(tmpDir, 'stage');
   mkdirSync(stageDir);
@@ -63,14 +63,14 @@ function buildFixture(): Fixture {
   writeFileSync(join(liffDir, 'index.html'), liffIndex);
   writeFileSync(join(migrationsDir, '041_x.sql'), migration);
 
-  // Build tar.gz using system tar (deterministic enough for testing).
-  // COPYFILE_DISABLE=1 suppresses macOS AppleDouble (._*) sidecar files which
-  // would otherwise leak into the archive and break hash-determinism tests.
   const tarball = join(tmpDir, 'bundle.tar.gz');
-  execSync(`tar czf ${tarball} -C ${stageDir} worker worker-assets admin liff migrations`, {
-    stdio: 'pipe',
-    env: { ...process.env, COPYFILE_DISABLE: '1' },
-  });
+  await createFixtureTarball(tarball, new Map([
+    ['worker/index.js', workerBytes],
+    ['admin/index.html', adminIndex],
+    ['admin/sub/app.js', adminSubApp],
+    ['liff/index.html', liffIndex],
+    ['migrations/041_x.sql', migration],
+  ]));
 
   return {
     tmpDir,
@@ -109,8 +109,8 @@ function refHashBuffer(buf: Buffer): string {
 describe('parseBundleStream', () => {
   let fixture: Fixture;
 
-  beforeAll(() => {
-    fixture = buildFixture();
+  beforeAll(async () => {
+    fixture = await buildFixture();
   });
 
   afterAll(() => {
@@ -146,8 +146,8 @@ describe('parseBundleStream', () => {
 describe('verifyBundleHashes', () => {
   let fixture: Fixture;
 
-  beforeAll(() => {
-    fixture = buildFixture();
+  beforeAll(async () => {
+    fixture = await buildFixture();
   });
 
   afterAll(() => {

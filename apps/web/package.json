@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3001",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit",
     "build": "next build",
     "start": "next start",
     "test": "vitest run --config vitest.config.ts"

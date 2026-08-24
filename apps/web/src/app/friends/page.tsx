@@ -142,7 +142,7 @@ export default function FriendsPage() {
             type="text"
             value={searchInput}
             onChange={(e) => handleSearchInputChange(e.target.value)}
-            placeholder="友だち名を検索"
+            placeholder="管理用ニックネーム・LINE表示名を検索"
             className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <select

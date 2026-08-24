@@ -76,6 +76,11 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
         )}
         <div className="min-w-0">
           <p className="text-sm font-medium text-gray-900 truncate">{friend.displayName}</p>
+          {friend.managementNickname && (
+            <p className="text-[10px] text-gray-500 truncate" title={friend.lineDisplayName || ''}>
+              LINE: {friend.lineDisplayName || '名前なし'}
+            </p>
+          )}
           <p className="text-[10px] text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
           {!isFollowing && (
             <p className="text-[10px] text-red-400 mt-0.5">ブロック / 退会</p>
@@ -160,7 +165,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
             onClick={(e) => { e.stopPropagation(); onTagEditClick() }}
             className="text-[10px] text-blue-600 hover:text-blue-800 underline mt-0.5"
           >
-            タグ編集
+            友だち詳細
           </button>
         )}
       </div>

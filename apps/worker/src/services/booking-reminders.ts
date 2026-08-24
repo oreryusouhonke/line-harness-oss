@@ -43,7 +43,7 @@ export async function processDueReminders(
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
-              f.line_user_id
+              COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
          FROM booking_reminders r
          INNER JOIN bookings b ON b.id = r.booking_id
          INNER JOIN menus m ON m.id = b.menu_id

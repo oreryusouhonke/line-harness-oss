@@ -29,5 +29,8 @@
     "crm",
     "d1",
     "cloudflare"
-  ]
+  ],
+  "dependencies": {
+    "@line-crm/shared": "workspace:*"
+  }
 }

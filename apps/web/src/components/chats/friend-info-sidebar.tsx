@@ -1,11 +1,14 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { api, type MileageHistoryItem, type MileageSummary } from '@/lib/api'
+import { api } from '@/lib/api'
+import ManagementNicknameEditor from '@/components/friends/management-nickname-editor'
 
 interface FriendDetail {
   id: string
   displayName: string | null
+  lineDisplayName: string | null
+  managementNickname: string | null
   pictureUrl: string | null
   isFollowing: boolean
   metadata: Record<string, unknown>
@@ -145,7 +148,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
   if (!friendId) return null
 
   return (
-    <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
+    <div className="min-h-0 w-full lg:w-80 lg:flex-shrink bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
         <h3 className="text-sm font-semibold text-gray-700">友だち詳細</h3>
       </div>
@@ -187,49 +190,18 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               </div>
             </div>
 
-            {/* Harness Mileage — canonical user identity across LINE accounts */}
+            {/* Management-only nickname. Never changes the LINE profile name. */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-2">マイル</h4>
-              {mileage.kind === 'loading' ? (
-                <div className="h-24 animate-pulse rounded-xl bg-gray-100" />
-              ) : mileage.kind === 'error' ? (
-                <p className="text-[11px] text-red-500 italic">マイルの取得に失敗しました</p>
-              ) : (
-                <div className="overflow-hidden rounded-xl bg-gradient-to-br from-gray-900 via-gray-700 to-amber-800 p-3.5 text-white shadow-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-[10px] font-semibold text-white/70">{mileage.summary.programName}</p>
-                      <p className="mt-0.5 text-2xl font-bold tabular-nums">
-                        {mileage.summary.available.toLocaleString('ja-JP')}
-                        <span className="ml-1 text-[11px] font-semibold text-white/70">mile</span>
-                      </p>
-                      <p className="text-[10px] text-white/60">利用可能</p>
-                    </div>
-                    {mileage.summary.pending > 0 && (
-                      <span className="rounded-full bg-white/15 px-2 py-1 text-[10px] font-medium">
-                        確定待ち {mileage.summary.pending.toLocaleString('ja-JP')}
-                      </span>
-                    )}
-                  </div>
-
-                  {mileage.history.length > 0 ? (
-                    <div className="mt-3 space-y-1.5 border-t border-white/15 pt-2.5">
-                      {mileage.history.slice(0, 3).map((item) => (
-                        <div key={item.id} className="flex items-center justify-between gap-2 text-[10px]">
-                          <span className="min-w-0 truncate text-white/75">{item.reason}</span>
-                          <span className={`shrink-0 font-semibold tabular-nums ${item.amount > 0 ? 'text-amber-200' : 'text-white/80'}`}>
-                            {item.amount > 0 ? '+' : ''}{item.amount.toLocaleString('ja-JP')}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 border-t border-white/15 pt-2.5 text-[10px] text-white/50">
-                      まだマイル履歴はありません
-                    </p>
-                  )}
-                </div>
-              )}
+              <ManagementNicknameEditor
+                friendId={friend.id}
+                lineDisplayName={friend.lineDisplayName}
+                managementNickname={friend.managementNickname}
+                onSaved={(nickname) => setFriend((current) => current ? {
+                  ...current,
+                  managementNickname: nickname,
+                  displayName: nickname || current.lineDisplayName,
+                } : current)}
+              />
             </div>
 
             {/* Status / Operator */}

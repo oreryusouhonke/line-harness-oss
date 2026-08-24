@@ -5,19 +5,31 @@ import { parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
 import { api, fetchApi } from '@/lib/api'
 import { UNANSWERED_REFRESH_EVENT } from '@/lib/events'
 import { useAccount } from '@/contexts/account-context'
-import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
 import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
+import { isIemotoBotActive, isImportedLineHistory } from './chat-mode'
 
 interface Chat {
   id: string
   friendId: string
   friendName: string
+  lineDisplayName: string | null
+  managementNickname: string | null
   friendPictureUrl: string | null
   operatorId: string | null
   status: 'unread' | 'in_progress' | 'resolved'
+  handlingMode: 'bot' | 'human'
+  botState: string
+  attentionStatus: string
+  priority: string
+  assignedStaffId: string | null
+  lockOwnerId: string | null
+  lockExpiresAt: string | null
+  nextActionAt: string | null
+  lastCustomerMessageAt: string | null
+  version: number
   notes: string | null
   lastMessageAt: string | null
   lastMessageContent: string | null
@@ -32,6 +44,8 @@ interface ChatMessage {
   direction: 'incoming' | 'outgoing'
   messageType: string
   content: string
+  source?: string
+  canQuote?: boolean
   createdAt: string
 }
 
@@ -39,9 +53,17 @@ interface ChatDetail extends Chat {
   friendName: string
   friendPictureUrl: string | null
   messages?: ChatMessage[]
+  handlingMode: 'bot' | 'human'
+  version: number
+  botGeneration: number
+  botState: string
+  attentionStatus: string
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
+type QueueFilter = 'all' | 'needs_action' | 'overdue' | 'unassigned' | 'mine' | 'human' | 'bot'
+
+const SHOW_RESOLVED_PREF_KEY = 'lh_chat_show_resolved'
 
 const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
   unread: { label: '未読', className: 'bg-red-100 text-red-700' },
@@ -55,12 +77,6 @@ const statusFilters: { key: StatusFilter; label: string }[] = [
   { key: 'in_progress', label: '対応中' },
   { key: 'resolved', label: '解決済' },
 ]
-
-const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
-// 一覧の1ページ件数。worker 側 /api/chats のデフォルト LIMIT と揃える。
-const CHAT_PAGE_SIZE = 300
-const LOADING_SECONDS_PREF_KEY = 'lh_chat_loading_seconds'
-const LOADING_REFRESH_INTERVAL_MS = 4000
 
 function StickerMessageImage({ content }: { content: string }) {
   const [failed, setFailed] = useState(false)
@@ -77,6 +93,43 @@ function StickerMessageImage({ content }: { content: string }) {
       loading="lazy"
       onError={() => setFailed(true)}
     />
+  )
+}
+
+function FriendNamePair({ lineDisplayName, managementNickname, fallback }: {
+  lineDisplayName?: string | null
+  managementNickname?: string | null
+  fallback: string
+}) {
+  const lineName = lineDisplayName || fallback
+  const nickname = managementNickname?.trim()
+  const showNickname = nickname && nickname !== lineName
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <span className="truncate">{lineName}</span>
+      {showNickname && (
+        <span className="flex-shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+          管理: {nickname}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function ImportedHistoryCard({ message }: { message: ChatMessage }) {
+  return (
+    <details className="mx-auto max-w-[360px] rounded-xl border border-white/40 bg-white/95 text-gray-800 shadow-sm">
+      <summary className="cursor-pointer select-none px-4 py-3 text-sm font-semibold hover:bg-gray-50 rounded-xl">
+        過去履歴を見る
+        <span className="ml-2 text-xs font-normal text-gray-500">
+          {formatYmdSlash(message.createdAt)}まで
+        </span>
+      </summary>
+      <div className="max-h-[420px] overflow-y-auto border-t border-gray-200 px-4 py-3 text-sm whitespace-pre-wrap break-words">
+        {message.content}
+      </div>
+    </details>
   )
 }
 
@@ -302,6 +355,11 @@ export default function ChatsPage() {
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>('all')
+  // 個別チャットは全件表示が基本。解決済みを初期非表示にすると、移行済み37件のうち
+  // 要対応の1件だけが残り「チャットが消えた」ように見えるため、必ずONで開始する。
+  const [showResolved, setShowResolved] = useState(true)
+  const [currentStaffId, setCurrentStaffId] = useState<string | null>(null)
   const statusFilterRef = useRef<StatusFilter>('all')
   const unansweredOnlyRef = useRef(false)
   const [unansweredOnly, setUnansweredOnly] = useState(() => {
@@ -319,8 +377,6 @@ export default function ChatsPage() {
     const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname
     window.history.replaceState(null, '', url)
   }, [unansweredOnly])
-  // Send mode: 'enter' = Enter sends, Shift+Enter = newline; 'shift-enter' = reverse
-  const [sendMode, setSendMode] = useState<'enter' | 'shift-enter'>('enter')
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMoreChats, setHasMoreChats] = useState(false)
@@ -329,64 +385,25 @@ export default function ChatsPage() {
   const [messageContent, setMessageContent] = useState('')
   const [pendingImage, setPendingImage] = useState<ImageUploaderValue | null>(null)
   const [sending, setSending] = useState(false)
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
   const sendLockRef = useRef(false)
+  const chatListRefreshInFlightRef = useRef(false)
+  const chatDetailRefreshInFlightRef = useRef(false)
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
-  const [showLoadingIndicator, setShowLoadingIndicator] = useState(false)
-  const [loadingSeconds, setLoadingSeconds] = useState(5)
-  const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
-  const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
+  const [switchingHandlingMode, setSwitchingHandlingMode] = useState(false)
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  useEffect(() => {
-    try {
-      const rawEnabled = localStorage.getItem(SHOW_LOADING_PREF_KEY)
-      const rawSeconds = localStorage.getItem(LOADING_SECONDS_PREF_KEY)
-      if (rawEnabled !== null) setShowLoadingIndicator(rawEnabled === '1')
-      if (rawSeconds) {
-        const n = Number.parseInt(rawSeconds, 10)
-        if (Number.isFinite(n) && n >= 5 && n <= 60) setLoadingSeconds(n)
-      }
-    } catch {
-      // localStorage unavailable
+  const loadChats = useCallback(async (silent = false) => {
+    if (silent && chatListRefreshInFlightRef.current) return
+    chatListRefreshInFlightRef.current = true
+    if (!silent) {
+      setLoading(true)
+      setError('')
     }
-  }, [])
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(SHOW_LOADING_PREF_KEY, showLoadingIndicator ? '1' : '0')
-      localStorage.setItem(LOADING_SECONDS_PREF_KEY, String(loadingSeconds))
-    } catch {
-      // localStorage unavailable
-    }
-  }, [showLoadingIndicator, loadingSeconds])
-
-  // ページング用カーソル。表示リストは楽観更新で並び替わるため、
-  // 「サーバから最後に受け取った行」を ref で保持して次ページの起点にする
-  // (offset 方式だと新着で行が押し下げられた分が欠落する)。
-  const nextCursorRef = useRef<{ at: string; id: string } | null>(null)
-
-  const buildListParams = useCallback((cursor: { at: string; id: string } | null) => {
-    const params: {
-      status?: string; accountId?: string; unansweredOnly?: boolean;
-      limit?: number; beforeAt?: string; beforeId?: string;
-    } = {}
-    if (statusFilter !== 'all' && !unansweredOnly) params.status = statusFilter
-    if (selectedAccountId) params.accountId = selectedAccountId
-    if (unansweredOnly) params.unansweredOnly = true
-    else params.limit = CHAT_PAGE_SIZE
-    if (cursor) {
-      params.beforeAt = cursor.at
-      params.beforeId = cursor.id
-    }
-    return params
-  }, [statusFilter, selectedAccountId, unansweredOnly])
-
-  const loadChats = useCallback(async () => {
-    setLoading(true)
-    setError('')
     try {
       const chatRes = await api.chats.list(buildListParams(null))
       if (chatRes.success) {
@@ -398,9 +415,10 @@ export default function ChatsPage() {
         setHasMoreChats(!unansweredOnly && rows.length === CHAT_PAGE_SIZE)
       }
     } catch {
-      setError('チャットの読み込みに失敗しました。もう一度お試しください。')
+      if (!silent) setError('チャットの読み込みに失敗しました。もう一度お試しください。')
     } finally {
-      setLoading(false)
+      chatListRefreshInFlightRef.current = false
+      if (!silent) setLoading(false)
     }
   }, [buildListParams, unansweredOnly])
 
@@ -445,25 +463,28 @@ export default function ChatsPage() {
   }, [selectedAccountId])
 
   useEffect(() => { void loadAllFriends() }, [loadAllFriends])
+  useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_RESOLVED_PREF_KEY, showResolved ? '1' : '0')
+    } catch {
+      // localStorage unavailable
+    }
+  }, [showResolved])
+  useEffect(() => {
+    api.staff.me().then((res) => { if (res.success) setCurrentStaffId(res.data.id) }).catch(() => undefined)
+  }, [])
 
   // Keep refs in sync so setChats updater can read the latest filter without stale closure
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
   useEffect(() => { unansweredOnlyRef.current = unansweredOnly }, [unansweredOnly])
 
-  // Load/save sendMode preference (guarded — privacy-restricted browsers throw)
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('chat.sendMode')
-      if (saved === 'enter' || saved === 'shift-enter') setSendMode(saved)
-    } catch { /* localStorage unavailable */ }
-  }, [])
-  useEffect(() => {
-    try { localStorage.setItem('chat.sendMode', sendMode) } catch { /* ignore */ }
-  }, [sendMode])
-
-  const loadChatDetail = useCallback(async (chatId: string) => {
-    setDetailLoading(true)
-    setError('')
+  const loadChatDetail = useCallback(async (chatId: string, silent = false) => {
+    if (silent && chatDetailRefreshInFlightRef.current) return
+    chatDetailRefreshInFlightRef.current = true
+    if (!silent) {
+      setDetailLoading(true)
+      setError('')
+    }
     try {
       const res = await api.chats.get(chatId)
       if (res.success) {
@@ -472,19 +493,35 @@ export default function ChatsPage() {
       } else {
         // API は 200 で success:false を返す可能性 (例: 404 lookup)。詳細を画面に出す。
         const errMsg = (res as { error?: string }).error ?? '不明なエラー'
-        setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
+        if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
       }
     } catch (err) {
       // ネットワーク / parse / auth fail などの例外。empty catch だと原因不明だったので詳細を出す。
       const msg = err instanceof Error ? err.message : String(err)
-      setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
+      if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
     } finally {
-      setDetailLoading(false)
+      chatDetailRefreshInFlightRef.current = false
+      if (!silent) setDetailLoading(false)
     }
   }, [])
 
   useEffect(() => {
     loadChats()
+  }, [loadChats])
+
+  // LINE受信を画面再読み込みなしで反映する。非表示タブでは通信を止め、
+  // 前回取得が終わっていない場合は重ねて取得しない。
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      void loadChats(true)
+    }
+    const id = window.setInterval(refresh, 3000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', refresh)
+    }
   }, [loadChats])
 
   // Deep-link from other pages (e.g. /form-submissions): ?friend=<friendId>
@@ -503,6 +540,20 @@ export default function ChatsPage() {
       loadChatDetail(selectedChatId)
     } else {
       setChatDetail(null)
+    }
+  }, [selectedChatId, loadChatDetail])
+
+  useEffect(() => {
+    if (!selectedChatId) return
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      void loadChatDetail(selectedChatId, true)
+    }
+    const id = window.setInterval(refresh, 3000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', refresh)
     }
   }, [selectedChatId, loadChatDetail])
 
@@ -525,9 +576,21 @@ export default function ChatsPage() {
         id: chatDetail.id,
         friendId: chatDetail.friendId,
         friendName: chatDetail.friendName,
+        lineDisplayName: chatDetail.lineDisplayName,
+        managementNickname: chatDetail.managementNickname,
         friendPictureUrl: chatDetail.friendPictureUrl,
         operatorId: chatDetail.operatorId ?? null,
         status: chatDetail.status,
+        handlingMode: chatDetail.handlingMode ?? 'bot',
+        botState: chatDetail.botState ?? 'IDLE',
+        attentionStatus: chatDetail.attentionStatus ?? 'NONE',
+        priority: chatDetail.priority ?? 'NORMAL',
+        assignedStaffId: chatDetail.assignedStaffId ?? null,
+        lockOwnerId: chatDetail.lockOwnerId ?? null,
+        lockExpiresAt: chatDetail.lockExpiresAt ?? null,
+        nextActionAt: chatDetail.nextActionAt ?? null,
+        lastCustomerMessageAt: chatDetail.lastCustomerMessageAt ?? null,
+        version: chatDetail.version ?? 1,
         notes: chatDetail.notes ?? null,
         lastMessageAt: chatDetail.lastMessageAt ?? lastMsg?.createdAt ?? null,
         lastMessageContent: chatDetail.lastMessageContent ?? lastMsg?.content ?? null,
@@ -581,26 +644,8 @@ export default function ChatsPage() {
     setSelectedChatId(chatId)
     setMessageContent('')
     setPendingImage(null)
+    setReplyTo(null)
   }
-
-  const triggerLoadingAnimation = useCallback(async (chatId: string) => {
-    if (!showLoadingIndicator) return
-
-    const now = Date.now()
-    const last = lastLoadingTriggerAtRef.current[chatId] ?? 0
-    if (now - last < LOADING_REFRESH_INTERVAL_MS) return
-    lastLoadingTriggerAtRef.current[chatId] = now
-
-    try {
-      await fetchApi<{ success: boolean }>(`/api/chats/${chatId}/loading`, {
-        method: 'POST',
-        body: JSON.stringify({ loadingSeconds }),
-      })
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : 'unknown'
-      setError(`ローディング表示の開始に失敗しました: ${detail}`)
-    }
-  }, [showLoadingIndicator, loadingSeconds])
 
   const handleSendMessage = async () => {
     if (!selectedChatId || sending || sendLockRef.current) return
@@ -610,19 +655,25 @@ export default function ChatsPage() {
     setSending(true)
     try {
       const now = new Date().toISOString()
+      let currentVersion = chatDetail?.version ?? 1
       // --- Image send path (runs first when image is present) ---
       if (pendingImage && pendingImage.mode === 'line-image') {
         const imgPayload = JSON.stringify({
           originalContentUrl: pendingImage.originalContentUrl,
           previewImageUrl: pendingImage.previewImageUrl,
         })
-        await api.chats.send(sendingChatId, { messageType: 'image', content: imgPayload })
+        const imageResult = await api.chats.send(sendingChatId, {
+          messageType: 'image', content: imgPayload, expectedVersion: currentVersion, idempotencyKey: crypto.randomUUID(),
+        })
+        if (imageResult.success) currentVersion = imageResult.data.version
         setPendingImage(null)
         // Optimistic update for image
         setChatDetail((prev) => (prev && prev.id === sendingChatId) ? {
           ...prev,
           lastMessageAt: now,
           status: 'in_progress',
+          handlingMode: 'human',
+          version: currentVersion,
           messages: [
             ...(prev.messages ?? []),
             {
@@ -666,14 +717,20 @@ export default function ChatsPage() {
       // --- Text send path (runs independently — both paths execute when both image and text are present) ---
       if (messageContent.trim()) {
         const content = messageContent.trim()
-        await api.chats.send(sendingChatId, { content })
+        const textResult = await api.chats.send(sendingChatId, {
+          content, expectedVersion: currentVersion, idempotencyKey: crypto.randomUUID(), quoteMessageId: replyTo?.id,
+        })
+        if (textResult.success) currentVersion = textResult.data.version
         setMessageContent('')
+        setReplyTo(null)
         // Optimistic update: append message locally instead of refetching (prevents scroll jump / full reload feel)
         // Only mutate chatDetail if it still corresponds to the chat we just sent to
         setChatDetail((prev) => (prev && prev.id === sendingChatId) ? {
           ...prev,
           lastMessageAt: now,
           status: 'in_progress',
+          handlingMode: 'human',
+          version: currentVersion,
           messages: [
             ...(prev.messages ?? []),
             {
@@ -741,6 +798,47 @@ export default function ChatsPage() {
     }
   }
 
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!selectedChatId || deletingMessageId) return
+    if (!window.confirm('このメッセージをHarness上から削除しますか？\n相手のLINE上からは削除されません。')) return
+    setDeletingMessageId(messageId)
+    try {
+      const result = await api.chats.deleteMessage(selectedChatId, messageId)
+      if (!result.success) throw new Error('delete_failed')
+      setChatDetail((prev) => prev ? {
+        ...prev,
+        messages: (prev.messages ?? []).filter((message) => message.id !== messageId),
+      } : prev)
+      await loadChats(true)
+    } catch {
+      setError('メッセージの削除に失敗しました。')
+    } finally {
+      setDeletingMessageId(null)
+    }
+  }
+
+  const handleHandlingMode = async (mode: 'bot' | 'human') => {
+    if (!selectedChatId || switchingHandlingMode) return
+    if (mode === 'bot' && (messageContent.trim() || pendingImage)) {
+      setError('未送信の文章または画像があります。送信するか削除してからBotへ戻してください。')
+      return
+    }
+    setSwitchingHandlingMode(true)
+    try {
+      const key = crypto.randomUUID()
+      if (mode === 'human') {
+        await api.chats.handoff(selectedChatId, chatDetail?.version ?? 1, key)
+      } else {
+        await api.chats.returnToBot(selectedChatId, chatDetail?.version ?? 1, key)
+      }
+      await loadChatDetail(selectedChatId)
+    } catch {
+      setError('家元Botと有人対応の切替に失敗しました。')
+    } finally {
+      setSwitchingHandlingMode(false)
+    }
+  }
+
   const handleSaveNotes = async () => {
     if (!selectedChatId) return
     setSavingNotes(true)
@@ -758,18 +856,39 @@ export default function ChatsPage() {
     // IME変換確定のEnterでは送信しない
     if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) return
     if (e.key !== 'Enter') return
-    // sendMode 'enter': Enter単体で送信、Shift+Enterは改行
-    // sendMode 'shift-enter': Shift+Enterで送信、Enter単体は改行
-    const shouldSend = sendMode === 'enter' ? !e.shiftKey : e.shiftKey
-    if (shouldSend) {
+    // Enterで送信、Shift+Enterで改行
+    if (!e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
     }
   }
 
+  const activeChats = showResolved ? chats : chats.filter((chat) => chat.status !== 'resolved')
+  const visibleChats = activeChats.filter((chat) => {
+    if (queueFilter === 'needs_action') return chat.status === 'unread'
+    if (queueFilter === 'overdue') return chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())
+    if (queueFilter === 'unassigned') return chat.handlingMode === 'human' && !chat.assignedStaffId
+    if (queueFilter === 'mine') return Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)
+    if (queueFilter === 'human') return chat.handlingMode === 'human'
+    if (queueFilter === 'bot') return isIemotoBotActive(chat)
+    return true
+  })
+  const queueCounts = {
+    all: activeChats.length,
+    needs_action: activeChats.filter((chat) => chat.status === 'unread').length,
+    overdue: activeChats.filter((chat) => chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())).length,
+    unassigned: activeChats.filter((chat) => chat.handlingMode === 'human' && !chat.assignedStaffId).length,
+    mine: activeChats.filter((chat) => Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)).length,
+    human: activeChats.filter((chat) => chat.handlingMode === 'human').length,
+    bot: activeChats.filter(isIemotoBotActive).length,
+  }
+
   return (
-    <div>
-      <Header title="オペレーターチャット" />
+    <div className="lg:-mt-5">
+      {/* この画面は会話の縦表示を優先するため、共通ヘッダーよりコンパクトにする。 */}
+      <div className="mb-1 flex items-center">
+        <h1 className="text-sm font-semibold tracking-tight text-gray-700">オペレーターチャット</h1>
+      </div>
 
       {/* Error */}
       {error && (
@@ -778,28 +897,43 @@ export default function ChatsPage() {
         </div>
       )}
 
-      <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
+      <div className="flex gap-3 h-[calc(100vh-84px)] lg:h-[calc(100vh-90px)]">
         {/* Left Panel: Chat List */}
-        <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
-          {/* タブ (全て / 未読 / 対応中 / 解決済) は意図的に削除。直近メッセージが見やすい LINE 風一覧を優先。 */}
-
+        <div className={`w-full lg:w-72 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           {/* Filter row */}
-          <div className="px-3 py-2 border-b border-gray-100 flex flex-wrap items-center gap-2">
-            {statusFilters.map((f) => (
+          <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+            {([
+              { key: 'all', label: '全て' },
+              { key: 'needs_action', label: '🔴 要対応' },
+              { key: 'overdue', label: '⏰ 期限超過' },
+              { key: 'unassigned', label: '未担当' },
+              { key: 'mine', label: '自分の担当' },
+              { key: 'human', label: '🟠 有人対応' },
+              { key: 'bot', label: '🟢 Bot対応' },
+            ] as { key: QueueFilter; label: string }[]).map((f) => (
               <button
                 key={f.key}
-                onClick={() => setStatusFilter(f.key)}
+                onClick={() => setQueueFilter(f.key)}
                 disabled={unansweredOnly}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                  statusFilter === f.key
+                className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
+                  queueFilter === f.key
                     ? 'bg-green-500 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 } ${unansweredOnly ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
-                {f.label}
+                {f.label} {queueCounts[f.key]}
               </button>
             ))}
-            <label className="flex items-center gap-1.5 text-xs font-medium whitespace-nowrap ml-auto cursor-pointer select-none">
+            <label className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showResolved}
+                onChange={(e) => setShowResolved(e.target.checked)}
+                className="rounded"
+              />
+              解決済みを表示
+            </label>
+            <label className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={unansweredOnly}
@@ -828,7 +962,7 @@ export default function ChatsPage() {
               </div>
             ) : (
               <>
-                {chats.map((chat) => {
+                {visibleChats.map((chat) => {
                   const isSelected = selectedChatId === chat.id
                   // 「真の自発（要対応）」= chat.status='unread'。webhook 側で auto_reply に
                   // マッチしなかった incoming のみ unread に設定される。auto_reply trigger
@@ -852,15 +986,15 @@ export default function ChatsPage() {
                     <button
                       key={chat.id}
                       onClick={() => { setSelectedFriendId(null); handleSelectChat(chat.id); }}
-                      className={`w-full text-left px-4 py-3 border-b border-gray-100 transition-colors ${
+                      className={`w-full text-left px-3 py-2 border-b border-gray-100 transition-colors ${
                         isSelected && !selectedFriendId ? 'bg-green-50' : 'hover:bg-gray-50'
                       }`}
                     >
-                      <div className="flex items-start gap-3">
+                      <div className="flex items-start gap-2.5">
                         {chat.friendPictureUrl ? (
-                          <img src={chat.friendPictureUrl} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
+                          <img src={chat.friendPictureUrl} alt="" className="w-9 h-9 rounded-full flex-shrink-0" />
                         ) : (
-                          <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                          <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
                             <span className="text-gray-500 text-sm">{chat.friendName.charAt(0)}</span>
                           </div>
                         )}
@@ -870,7 +1004,13 @@ export default function ChatsPage() {
                               {chat.status === 'unread' && (
                                 <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" aria-label="未読" />
                               )}
-                              <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
+                              <p className="min-w-0 text-sm font-medium text-gray-900">
+                                <FriendNamePair
+                                  lineDisplayName={chat.lineDisplayName}
+                                  managementNickname={chat.managementNickname}
+                                  fallback={chat.friendName}
+                                />
+                              </p>
                             </div>
                             <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDatetime(chat.lastMessageAt)}</span>
                           </div>
@@ -887,6 +1027,20 @@ export default function ChatsPage() {
                             )}
                             {preview || <span className="italic text-gray-300">(まだメッセージなし)</span>}
                           </p>
+                          <div className="mt-1 flex items-center gap-1">
+                            {chat.status === 'unread' && (
+                              <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">要対応</span>
+                            )}
+                            {chat.handlingMode === 'human' ? (
+                              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-700">
+                                有人
+                              </span>
+                            ) : isIemotoBotActive(chat) ? (
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                                家元Bot
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
                     </button>
@@ -942,8 +1096,12 @@ export default function ChatsPage() {
                     <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0" />
                   )}
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {chatDetail.friendName}
+                    <p className="min-w-0 text-sm font-medium text-gray-900">
+                      <FriendNamePair
+                        lineDisplayName={chatDetail.lineDisplayName}
+                        managementNickname={chatDetail.managementNickname}
+                        fallback={chatDetail.friendName}
+                      />
                     </p>
                     <span
                       className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
@@ -953,6 +1111,26 @@ export default function ChatsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {chatDetail.handlingMode === 'human' ? (
+                    <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-bold text-orange-800">
+                      家元・スタッフ対応中
+                    </span>
+                  ) : isIemotoBotActive(chatDetail) ? (
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">
+                      家元Bot対応中
+                    </span>
+                  ) : null}
+                  {chatDetail.handlingMode === 'human' ? (
+                    <button disabled={switchingHandlingMode} onClick={() => handleHandlingMode('bot')}
+                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-md disabled:opacity-50">
+                      Botへ戻す
+                    </button>
+                  ) : (
+                    <button disabled={switchingHandlingMode} onClick={() => handleHandlingMode('human')}
+                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-orange-700 bg-orange-50 hover:bg-orange-100 rounded-md disabled:opacity-50">
+                      本人対応へ切替
+                    </button>
+                  )}
                   {unansweredOnly && chats.length > 1 && (
                     <button
                       type="button"
@@ -1007,6 +1185,9 @@ export default function ChatsPage() {
                   </div>
                 ) : (
                   (chatDetail.messages ?? []).map((msg, idx) => {
+                    if (isImportedLineHistory(msg.source)) {
+                      return <ImportedHistoryCard key={msg.id} message={msg} />
+                    }
                     const prevMsg = idx > 0 ? (chatDetail.messages ?? [])[idx - 1] : null
                     const showDateSep = !prevMsg || !sameYmd(prevMsg.createdAt, msg.createdAt)
                     const isOutgoing = msg.direction === 'outgoing'
@@ -1056,6 +1237,9 @@ export default function ChatsPage() {
                           )}
 
                           <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
+                            <span className="text-[11px] font-medium text-white/85 mb-0.5 px-1">
+                              {!isOutgoing ? 'お客様' : msg.source === 'iemoto_bot' ? '家元Bot' : msg.source === 'system_handoff' ? '対応切替のお知らせ' : '家元・スタッフ'}
+                            </span>
                             {/* メッセージバブル */}
                             <div
                               className={`max-w-[320px] px-3 py-2 text-sm break-words whitespace-pre-wrap ${
@@ -1071,6 +1255,30 @@ export default function ChatsPage() {
                             <span className="text-xs text-white/50 mt-0.5 px-1">
                               {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                             </span>
+                            <div className="mt-0.5 flex items-center gap-2 px-1 text-[11px]">
+                              {msg.canQuote && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReplyTo(msg)
+                                    textareaRef.current?.focus()
+                                  }}
+                                  className="text-white/80 hover:text-white underline"
+                                >
+                                  リプライ
+                                </button>
+                              )}
+                              {isOutgoing && (
+                                <button
+                                  type="button"
+                                  disabled={deletingMessageId === msg.id}
+                                  onClick={() => handleDeleteMessage(msg.id)}
+                                  className="text-white/70 hover:text-white underline disabled:opacity-50"
+                                >
+                                  {deletingMessageId === msg.id ? '削除中…' : '削除'}
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1079,8 +1287,8 @@ export default function ChatsPage() {
                 )}
               </div>
 
-              {/* Notes */}
-              <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
+              {/* On smaller screens the right column is hidden, so keep these tools available here. */}
+              <div className="xl:hidden px-4 py-2 border-t border-gray-200 bg-gray-50 space-y-2">
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
@@ -1101,79 +1309,42 @@ export default function ChatsPage() {
 
               {/* Send Message Form */}
               <div className="px-4 py-3 border-t border-gray-200">
-                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600">
-                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={showLoadingIndicator}
-                      onChange={(e) => setShowLoadingIndicator(e.target.checked)}
-                      className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                    />
-                    入力中ローディングを表示
-                  </label>
-                  <select
-                    value={loadingSeconds}
-                    onChange={(e) => setLoadingSeconds(Number.parseInt(e.target.value, 10))}
-                    disabled={!showLoadingIndicator}
-                    className="border border-gray-300 rounded-md px-2 py-1 bg-white disabled:bg-gray-100 disabled:text-gray-400"
-                  >
-                    {[5, 10, 15, 20, 30, 45, 60].map((sec) => (
-                      <option key={sec} value={sec}>{sec}秒</option>
-                    ))}
-                  </select>
-                  <span className="text-gray-500">送信キー:</span>
-                  <label className="flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="radio"
-                      checked={sendMode === 'enter'}
-                      onChange={() => setSendMode('enter')}
-                      className="accent-green-600"
-                    />
-                    <span>Enter</span>
-                  </label>
-                  <label className="flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="radio"
-                      checked={sendMode === 'shift-enter'}
-                      onChange={() => setSendMode('shift-enter')}
-                      className="accent-green-600"
-                    />
-                    <span>Shift+Enter</span>
-                  </label>
-                </div>
-                <div className="mb-2">
+                {replyTo && (
+                  <div className="mb-2 flex items-start justify-between gap-3 rounded-lg border-l-4 border-green-500 bg-green-50 px-3 py-2 text-xs text-gray-700">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-green-700">このメッセージにリプライ</p>
+                      <p className="truncate">{replyTo.content}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyTo(null)}
+                      className="flex-shrink-0 text-gray-500 hover:text-gray-800"
+                      aria-label="リプライを解除"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-end gap-2 rounded-xl border border-gray-300 bg-white p-2 focus-within:ring-2 focus-within:ring-green-500">
                   <ImageUploader
                     mode="line-image"
                     value={pendingImage}
                     onChange={setPendingImage}
-                    label="画像を送る (任意)"
+                    variant="composer"
                   />
-                </div>
-                <div className="flex items-end gap-2">
                   <textarea
                     ref={textareaRef}
                     rows={2}
                     value={messageContent}
                     style={{ maxHeight: '200px', overflowY: 'auto' }}
                     onChange={(e) => {
-                      const value = e.target.value
-                      setMessageContent(value)
-                      if (selectedChatId && isMessageInputFocused && value.trim()) {
-                        void triggerLoadingAnimation(selectedChatId)
-                      }
+                      setMessageContent(e.target.value)
                     }}
                     onCompositionStart={() => { isComposingRef.current = true }}
                     onCompositionEnd={() => { isComposingRef.current = false }}
-                    onFocus={() => {
-                      setIsMessageInputFocused(true)
-                      if (selectedChatId) {
-                        void triggerLoadingAnimation(selectedChatId)
-                      }
-                    }}
-                    onBlur={() => setIsMessageInputFocused(false)}
                     onKeyDown={handleKeyDown}
                     placeholder="メッセージを入力..."
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none overflow-y-auto"
+                    className="min-h-10 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2 py-2 text-sm focus:outline-none"
                   />
                   <button
                     onClick={handleSendMessage}
@@ -1197,7 +1368,30 @@ export default function ChatsPage() {
           直接渡せる (chat list SQL が `id: f.id` で friend_id を返す)。
         */}
         {(selectedChatId || selectedFriendId) && (
-          <div className="hidden xl:flex">
+          <div className="hidden xl:flex w-80 flex-shrink-0 flex-col gap-3 min-h-0">
+            {selectedChatId && chatDetail && (
+              <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm space-y-3">
+                <div>
+                  <h3 className="mb-1.5 text-xs font-semibold text-gray-700">個別メモ</h3>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="メモを入力..."
+                      className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-500"
+                    />
+                    <button
+                      onClick={handleSaveNotes}
+                      disabled={savingNotes}
+                      className="rounded-md bg-gray-100 px-2 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      {savingNotes ? '保存中...' : '保存'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             <FriendInfoSidebar
               friendId={selectedFriendId || selectedChatId}
               chatStatus={

@@ -1157,8 +1157,8 @@ broadcasts.post('/api/broadcasts/:id/test-send', async (c) => {
 
     const placeholders = friendIds.map(() => '?').join(',');
     const friends = await c.env.DB.prepare(
-      `SELECT id, line_user_id, display_name FROM friends WHERE id IN (${placeholders})`
-    ).bind(...friendIds).all<{ id: string; line_user_id: string; display_name: string | null }>();
+      `SELECT id, COALESCE(line_platform_user_id, line_user_id) AS line_user_id FROM friends WHERE id IN (${placeholders})`
+    ).bind(...friendIds).all<{ id: string; line_user_id: string }>();
 
     const account = await getLineAccountById(c.env.DB, accountId);
     if (!account) return c.json({ success: false, error: 'LINE account not found' }, 400);

@@ -36,7 +36,7 @@ export async function runExpirer(
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
-              f.line_user_id
+              COALESCE(f.line_platform_user_id, f.line_user_id) AS line_user_id
          FROM bookings b
          INNER JOIN menus m ON m.id = b.menu_id
          INNER JOIN staff s ON s.id = b.staff_id

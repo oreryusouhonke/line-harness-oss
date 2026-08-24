@@ -33,7 +33,9 @@ function serializeFriend(row: DbFriend) {
   return {
     id: row.id,
     lineUserId: row.line_user_id,
-    displayName: row.display_name,
+    displayName: row.management_nickname || row.display_name,
+    lineDisplayName: row.display_name,
+    managementNickname: row.management_nickname,
     pictureUrl: row.picture_url,
     statusMessage: row.status_message,
     isFollowing: Boolean(row.is_following),
@@ -127,8 +129,8 @@ friends.get('/api/friends', async (c) => {
       binds.push(lineAccountId);
     }
     if (search) {
-      conditions.push('f.display_name LIKE ?');
-      binds.push(`%${search}%`);
+      conditions.push('(f.management_nickname LIKE ? OR f.display_name LIKE ?)');
+      binds.push(`%${search}%`, `%${search}%`);
     }
     // Unhandled filter: chats.status === 'unread'.
     //
@@ -218,16 +220,23 @@ friends.get('/api/friends', async (c) => {
       listStmt = db.prepare(
         `SELECT ${baseSelect},
                 CASE
-                  WHEN f.display_name LIKE ? THEN 0
-                  WHEN f.display_name LIKE ? THEN 1
-                  WHEN f.display_name LIKE ? OR f.display_name LIKE ? THEN 2
-                  ELSE 3
+                  WHEN f.management_nickname LIKE ? THEN 0
+                  WHEN f.management_nickname LIKE ? THEN 1
+                  WHEN f.management_nickname LIKE ? OR f.management_nickname LIKE ? THEN 2
+                  WHEN f.display_name LIKE ? THEN 3
+                  WHEN f.display_name LIKE ? THEN 4
+                  WHEN f.display_name LIKE ? OR f.display_name LIKE ? THEN 5
+                  ELSE 6
                 END AS match_score
          ${baseFrom} ${where}
          ORDER BY match_score ASC, f.created_at ${createdOrder}
          LIMIT ? OFFSET ?`,
       );
-      listBinds = [exactPattern, prefixPattern, wordStartAscii, wordStartFullWidth, ...binds, limit, offset];
+      listBinds = [
+        exactPattern, prefixPattern, wordStartAscii, wordStartFullWidth,
+        exactPattern, prefixPattern, wordStartAscii, wordStartFullWidth,
+        ...binds, limit, offset,
+      ];
     } else {
       listStmt = db.prepare(
         `SELECT ${baseSelect} ${baseFrom} ${where} ORDER BY f.created_at ${createdOrder} LIMIT ? OFFSET ?`,
@@ -450,6 +459,90 @@ friends.get('/api/friends/:id', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/friends/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/friends/:id/nickname-history - management nickname audit trail
+friends.get('/api/friends/:id/nickname-history', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const friend = await getFriendById(c.env.DB, friendId);
+    if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
+
+    const result = await c.env.DB.prepare(
+      `SELECT id, previous_nickname, new_nickname, changed_by_staff_id,
+              changed_by_name, changed_at
+         FROM friend_nickname_history
+        WHERE friend_id = ?
+        ORDER BY changed_at DESC, id DESC
+        LIMIT 100`,
+    ).bind(friendId).all<{
+      id: string;
+      previous_nickname: string | null;
+      new_nickname: string | null;
+      changed_by_staff_id: string;
+      changed_by_name: string;
+      changed_at: string;
+    }>();
+
+    return c.json({
+      success: true,
+      data: result.results.map((row) => ({
+        id: row.id,
+        previousNickname: row.previous_nickname,
+        newNickname: row.new_nickname,
+        changedByStaffId: row.changed_by_staff_id,
+        changedByName: row.changed_by_name,
+        changedAt: row.changed_at,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/friends/:id/nickname-history error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PUT /api/friends/:id/management-nickname - save or delete admin-only nickname
+friends.put('/api/friends/:id/management-nickname', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const body = await c.req.json<{ nickname?: string | null }>();
+    if (!Object.prototype.hasOwnProperty.call(body, 'nickname')) {
+      return c.json({ success: false, error: 'nickname is required' }, 400);
+    }
+
+    const nickname = typeof body.nickname === 'string' ? body.nickname.trim() : null;
+    if (nickname && nickname.length > 100) {
+      return c.json({ success: false, error: 'nickname must be 100 characters or fewer' }, 400);
+    }
+
+    const db = c.env.DB;
+    const friend = await getFriendById(db, friendId);
+    if (!friend) return c.json({ success: false, error: 'Friend not found' }, 404);
+
+    const nextNickname = nickname || null;
+    if (friend.management_nickname !== nextNickname) {
+      const staff = c.get('staff');
+      const now = jstNow();
+      await db.batch([
+        db.prepare('UPDATE friends SET management_nickname = ?, updated_at = ? WHERE id = ?')
+          .bind(nextNickname, now, friendId),
+        db.prepare(
+          `INSERT INTO friend_nickname_history
+             (id, friend_id, previous_nickname, new_nickname, changed_by_staff_id, changed_by_name, changed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(
+          crypto.randomUUID(), friendId, friend.management_nickname, nextNickname,
+          staff.id, staff.name, now,
+        ),
+      ]);
+    }
+
+    const updated = await getFriendById(db, friendId);
+    return c.json({ success: true, data: serializeFriend(updated!) });
+  } catch (err) {
+    console.error('PUT /api/friends/:id/management-nickname error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
