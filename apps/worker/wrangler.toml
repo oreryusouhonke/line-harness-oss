@@ -43,12 +43,14 @@ crons = ["* * * * *", "0 */6 * * *"]
 # Unset = keep forever (default). Set per-deployment, not here.
 [vars]
 WORKER_NAME = "line-harness"
-ADMIN_PAGES_PROJECT = "line-harness-admin"
+ADMIN_PAGES_PROJECT = "line-harness-admin-24b9f8e8"
 LIFF_PAGES_PROJECT = "line-harness-liff"
 D1_DATABASE_ID = "e6ddb47e-dce8-4cbd-ba14-e512209fc6f2"
 MANIFEST_URL = "https://github.com/Shudesu/line-harness-oss/releases/latest/download/release-manifest.json"
 WORKER_PUBLIC_URL = "https://line-harness.kataokamasanori.workers.dev"
-ADMIN_PUBLIC_URL = "https://line-harness-admin.pages.dev"
+ADMIN_PUBLIC_URL = "https://line-harness-admin-24b9f8e8.pages.dev"
+ADMIN_ORIGIN = "https://line-harness-admin-24b9f8e8.pages.dev"
+ADMIN_ALLOW_CROSS_SITE = "true"
 LIFF_PUBLIC_URL = "https://line-harness-liff.pages.dev"
 CF_ACCOUNT_ID = "68bcd974bcb0b8d5a23e721d7d3a124b"
 IEMOTO_BOT_ENABLED = "true"
@@ -85,12 +87,14 @@ crons = ["*/5 * * * *", "0 */6 * * *"]
 # production secret store, set via `wrangler secret put --env production`.
 [env.production.vars]
 WORKER_NAME = "line-harness"
-ADMIN_PAGES_PROJECT = "line-harness-admin"
+ADMIN_PAGES_PROJECT = "line-harness-admin-24b9f8e8"
 LIFF_PAGES_PROJECT = "line-harness-liff"
 D1_DATABASE_ID = "e6ddb47e-dce8-4cbd-ba14-e512209fc6f2"
 MANIFEST_URL = "https://github.com/Shudesu/line-harness-oss/releases/latest/download/release-manifest.json"
 WORKER_PUBLIC_URL = "https://line-harness.kataokamasanori.workers.dev"
-ADMIN_PUBLIC_URL = "https://line-harness-admin.pages.dev"
+ADMIN_PUBLIC_URL = "https://line-harness-admin-24b9f8e8.pages.dev"
+ADMIN_ORIGIN = "https://line-harness-admin-24b9f8e8.pages.dev"
+ADMIN_ALLOW_CROSS_SITE = "true"
 LIFF_PUBLIC_URL = "https://line-harness-liff.pages.dev"
 CF_ACCOUNT_ID = "68bcd974bcb0b8d5a23e721d7d3a124b"
 IEMOTO_BOT_ENABLED = "true"
