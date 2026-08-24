@@ -388,6 +388,7 @@ export default function ChatsPage() {
   const [sending, setSending] = useState(false)
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null)
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
+  const [downloadingMessageId, setDownloadingMessageId] = useState<string | null>(null)
   const sendLockRef = useRef(false)
   const chatListRefreshInFlightRef = useRef(false)
   const chatDetailRefreshInFlightRef = useRef(false)
@@ -828,6 +829,26 @@ export default function ChatsPage() {
     }
   }
 
+  const handleDownloadMessage = async (message: ChatMessage) => {
+    if (!selectedChatId || downloadingMessageId) return
+    setDownloadingMessageId(message.id)
+    try {
+      const { blob, fileName } = await api.chats.downloadMessage(selectedChatId, message.id)
+      const objectUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = fileName || message.content.replace(/^\[ファイル:\s*|]$/g, '') || 'download'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(objectUrl)
+    } catch {
+      setError('ファイルを取得できませんでした。LINE側の保存期限を過ぎている可能性があります。')
+    } finally {
+      setDownloadingMessageId(null)
+    }
+  }
+
   const handleHandlingMode = async (mode: 'bot' | 'human') => {
     if (!selectedChatId || switchingHandlingMode) return
     if (mode === 'bot' && (messageContent.trim() || pendingImage)) {
@@ -897,10 +918,6 @@ export default function ChatsPage() {
   return (
     <div className="lg:-mt-5">
       {/* この画面は会話の縦表示を優先するため、共通ヘッダーよりコンパクトにする。 */}
-      <div className="mb-1 flex items-center">
-        <h1 className="text-sm font-semibold tracking-tight text-gray-700">オペレーターチャット</h1>
-      </div>
-
       {/* Error */}
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -1222,6 +1239,19 @@ export default function ChatsPage() {
                       }
                     } else if (msg.messageType === 'sticker') {
                       bubbleContent = <StickerMessageImage content={msg.content} />
+                    } else if (msg.messageType === 'file') {
+                      bubbleContent = (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadMessage(msg)}
+                          disabled={downloadingMessageId === msg.id}
+                          className="flex max-w-[280px] items-center gap-2 text-left font-medium text-blue-700 underline disabled:opacity-60"
+                        >
+                          <span aria-hidden="true">📄</span>
+                          <span className="break-all">{msg.content.replace(/^\[ファイル:\s*|]$/g, '')}</span>
+                          <span className="shrink-0 text-xs">{downloadingMessageId === msg.id ? '取得中…' : '保存'}</span>
+                        </button>
+                      )
                     } else {
                       bubbleContent = <span>{msg.content}</span>
                     }
