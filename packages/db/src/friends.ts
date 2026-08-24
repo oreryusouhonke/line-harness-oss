@@ -3,7 +3,7 @@ export interface Friend {
   id: string;
   line_user_id: string;
   display_name: string | null;
-  management_nickname: string | null;
+  management_nickname?: string | null;
   picture_url: string | null;
   status_message: string | null;
   is_following: number;

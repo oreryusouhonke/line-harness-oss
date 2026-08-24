@@ -54,7 +54,7 @@ export default function ManagementNicknameEditor({
       onSaved?.(next || null)
       await loadHistory()
     } catch {
-      setError('管理用ニックネームの保存に失敗しました')
+      setError('管理用顧客名の保存に失敗しました')
     } finally {
       setSaving(false)
     }
@@ -63,12 +63,12 @@ export default function ManagementNicknameEditor({
   return (
     <div className="space-y-2">
       <div>
-        <label className="block text-[11px] font-medium text-gray-500 mb-1">管理用ニックネーム</label>
+        <label className="block text-[11px] font-medium text-gray-500 mb-1">顧客名（管理用）</label>
         <input
           value={value}
           maxLength={100}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="管理画面内だけで使う名前"
+          placeholder="例：辻本 太郎"
           className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
         />
       </div>
