@@ -979,11 +979,12 @@ export const api = {
       ),
   },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string }) => {
+    list: (params?: { status?: string; operatorId?: string; accountId?: string; search?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
       if (params?.operatorId) query.operatorId = params.operatorId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.search) query.search = params.search
       if (params?.unansweredOnly) query.unansweredOnly = '1'
       if (params?.limit !== undefined) query.limit = String(params.limit)
       // カーソルページング: (lastMessageAt, friendId) の複合カーソルより古い行を返す
