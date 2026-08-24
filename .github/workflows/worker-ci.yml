@@ -38,6 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -49,12 +51,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check migration safety and numbering
         run: pnpm tsx scripts/check-migrations.ts
+      - name: Build shared packages and SDKs
+        run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-harness/update-engine --filter @line-harness/sdk build
       - name: Run all unit tests
         run: pnpm test
       - name: Typecheck workspaces
         run: pnpm --filter worker --filter web --filter @line-crm/db --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-harness/sdk --filter @line-harness/update-engine typecheck
-      - name: Build shared packages and SDKs
-        run: pnpm --filter @line-crm/shared --filter @line-crm/line-sdk --filter @line-harness/update-engine --filter @line-harness/sdk build
       - name: Build Worker
         run: pnpm --filter worker build
         env:

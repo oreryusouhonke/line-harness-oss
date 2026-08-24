@@ -352,13 +352,13 @@ export const api = {
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
         `/api/friends/${id}/rich-menu`,
       ),
-    updateManagementNickname: (id: string, managementNickname: string | null) =>
+    updateManagementNickname: (id: string, nickname: string | null) =>
       fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}/management-nickname`, {
-        method: 'PATCH',
-        body: JSON.stringify({ managementNickname }),
+        method: 'PUT',
+        body: JSON.stringify({ nickname }),
       }),
     nicknameHistory: (id: string) =>
-      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/management-nickname/history`),
+      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/nickname-history`),
   },
   tags: {
     /** withCounts で friendCount 付き (JOIN 集計 — タグ管理ページ用)。 */
