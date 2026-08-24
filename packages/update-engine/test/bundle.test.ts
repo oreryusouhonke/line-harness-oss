@@ -66,6 +66,7 @@ async function buildFixture(): Promise<Fixture> {
   const tarball = join(tmpDir, 'bundle.tar.gz');
   await createFixtureTarball(tarball, new Map([
     ['worker/index.js', workerBytes],
+    ['worker-assets/index.html', workerAssetIndex],
     ['admin/index.html', adminIndex],
     ['admin/sub/app.js', adminSubApp],
     ['liff/index.html', liffIndex],

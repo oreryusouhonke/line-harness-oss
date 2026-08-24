@@ -269,6 +269,7 @@ export async function duplicateRichMenuGroup(
     name,
     chatBarText: RICH_MENU_CHAT_BAR_TEXT,
     size: source.size,
+    selected: false,
     pages: source.pages.map((page) => ({
       name: page.name,
       orderIndex: page.order_index,

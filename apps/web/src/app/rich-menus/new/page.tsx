@@ -14,6 +14,7 @@ export default function NewRichMenuPage() {
   const { selectedAccount } = useAccount()
   const [name, setName] = useState('')
   const [chatBarText] = useState(RICH_MENU_CHAT_BAR_TEXT)
+  const [selected, setSelected] = useState(true)
   const [templateKey, setTemplateKey] = useState(TEMPLATES[0].key)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)

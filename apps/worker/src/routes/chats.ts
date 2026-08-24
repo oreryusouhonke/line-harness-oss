@@ -312,23 +312,13 @@ chats.get('/api/chats', async (c) => {
       any_agg AS (
         SELECT friend_id,
           CASE WHEN message_type = 'text' THEN SUBSTR(content, 1, 200) ELSE NULL END AS content,
-          direction, message_type, created_at,
-          ROW_NUMBER() OVER (PARTITION BY friend_id ORDER BY created_at DESC) AS rn
+          direction, message_type,
+          MAX(created_at) AS created_at
         FROM messages_log
-        WHERE direction = 'incoming'
-          AND deleted_at IS NULL
+        WHERE deleted_at IS NULL
           AND (delivery_type IS NULL OR delivery_type != 'test')
-          AND ${accountFilterSql}
-      ),
-      ranked_any AS (
-        SELECT friend_id,
-          CASE WHEN message_type = 'text' THEN SUBSTR(content, 1, 200) ELSE NULL END AS content,
-          direction, message_type, created_at,
-          ROW_NUMBER() OVER (PARTITION BY friend_id ORDER BY created_at DESC) AS rn
-        FROM messages_log
-        WHERE (delivery_type IS NULL OR delivery_type != 'test')
-          AND deleted_at IS NULL
-          AND ${accountFilterSql}
+          AND friend_id IN (SELECT friend_id FROM page)
+        GROUP BY friend_id
       ),
       recent_msg AS (
         SELECT friend_id, content, direction, message_type, created_at AS preview_at
@@ -370,36 +360,14 @@ chats.get('/api/chats', async (c) => {
       ORDER BY d.last_message_at DESC, d.friend_id DESC
     `;
 
-    if (status) {
-      conditions.push(`COALESCE(c.status, 'resolved') = ?`);
-      bindings.push(status);
-    }
-    if (operatorId) {
-      conditions.push('c.operator_id = ?');
-      bindings.push(operatorId);
-    }
-    if (lineAccountId) {
-      conditions.push('f.line_account_id = ?');
-      bindings.push(lineAccountId);
-    }
-
-    if (conditions.length > 0) {
-      sql += ' WHERE ' + conditions.join(' AND ');
-    }
-    sql += ` ORDER BY
-      CASE
-        WHEN COALESCE(c.status, 'resolved') = 'unread' THEN 0
-        WHEN COALESCE(c.handling_mode, 'bot') = 'human' THEN 1
-        ELSE 2
-      END,
-      d.last_message_at DESC`;
-
-    // CTE 内 placeholder (4 個) → 外側 WHERE placeholder の順に bind する
-    const allBindings = [...ctePrebindings, ...bindings];
-    const stmt = allBindings.length > 0
-      ? c.env.DB.prepare(sql).bind(...allBindings)
-      : c.env.DB.prepare(sql);
-    const result = await stmt.all();
+    // placeholder 順 = SQL 出現順: last_any(account) → deduped 内 chats(account) →
+    // page 条件 → cursor (beforeAt ×2 + beforeId) → LIMIT。
+    const allBindings: unknown[] = [];
+    if (lineAccountId) allBindings.push(lineAccountId, lineAccountId);
+    allBindings.push(...conditionBindings);
+    if (useCursor) allBindings.push(beforeAt, beforeAt, beforeId);
+    allBindings.push(limit);
+    const result = await c.env.DB.prepare(sql).bind(...allBindings).all();
 
     const candidates = result.results.map((ch: Record<string, unknown>) => ({
       // 同じ公式アカウントの同一 LINE ユーザーが二重登録されている場合は、一覧上では
@@ -451,8 +419,20 @@ chats.get('/api/chats', async (c) => {
 
     let data = Array.from(byIdentity.values()).map(({ identityKey: _identityKey, ...row }) => row);
 
-    if (unansweredIds) {
-      data = data.filter((row) => unansweredIds!.has(row.id));
+    if (unansweredMap) {
+      data = data
+        .filter((row) => unansweredMap!.has(row.id))
+        .map((row) => {
+          const unanswered = unansweredMap!.get(row.id)!;
+          return {
+            ...row,
+            lastMessageAt: unanswered.lastIncomingAt,
+            lastMessageContent: unanswered.lastIncomingType === 'text' ? unanswered.lastIncomingContent : null,
+            lastMessageDirection: 'incoming' as const,
+            lastMessageType: unanswered.lastIncomingType,
+          };
+        })
+        .sort((a, b) => String(b.lastMessageAt || '').localeCompare(String(a.lastMessageAt || '')));
     }
 
     return c.json({ success: true, data });

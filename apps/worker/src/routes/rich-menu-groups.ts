@@ -921,6 +921,7 @@ richMenuGroups.post('/api/rich-menu-groups/:groupId/publish', async (c) => {
       id: group.id,
       size: group.size,
       chatBarText: group.chat_bar_text,
+      selected: group.selected === 1,
       // Registration must never publish to all users. Setting the account
       // default is a separate, owner-only endpoint below.
       isDefaultForAll: false,

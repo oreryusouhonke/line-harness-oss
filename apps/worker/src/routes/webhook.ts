@@ -13,10 +13,13 @@ import {
   jstNow,
   getEntryRouteByRefCode,
   getMessageTemplateById,
+  addTagToFriend,
 } from '@line-crm/db';
 import type { EntryRoute, Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
+import { matchAndReply } from '../services/auto-reply.js';
 import { buildMessage, expandVariables } from '../services/step-delivery.js';
+import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import { buildCouponSaleFlex } from '../services/coupon-sale-automation.js';
 import { handoffConversation } from '../services/conversation-control-store.js';
 import { dispatchConversationOutbound } from '../services/conversation-outbound.js';
@@ -311,7 +314,7 @@ webhook.post('/webhook', async (c) => {
           console.warn('[webhook] durable dedup unavailable', error instanceof Error ? error.message : 'unknown');
         }
         if (!reserved) continue;
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, c.env);
+        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, proxyDispatch, c.env);
         try { await completeWebhookEvent(db, event.webhookEventId); } catch { /* non-fatal audit update */ }
       } catch (err) {
         console.error('Error handling webhook event:', err);
@@ -400,6 +403,7 @@ async function handleEvent(
   workerUrl?: string,
   liffUrl?: string,
   r2?: R2Bucket,
+  proxyDispatch?: HarnessProxyDispatch,
   routingEnv: IemotoRoutingEnv = {},
 ): Promise<void> {
   if (event.type === 'follow') {
@@ -559,6 +563,20 @@ async function handleEvent(
 
     const postbackData = (event as unknown as { postback: { data: string } }).postback.data;
 
+    const autoReplyQuery = lineAccountId
+      ? `SELECT * FROM auto_replies WHERE is_active = 1 AND (line_account_id IS NULL OR line_account_id = ?) ORDER BY created_at ASC`
+      : `SELECT * FROM auto_replies WHERE is_active = 1 AND line_account_id IS NULL ORDER BY created_at ASC`;
+    const autoReplyStmt = db.prepare(autoReplyQuery);
+    const autoReplies = await (lineAccountId ? autoReplyStmt.bind(lineAccountId) : autoReplyStmt)
+      .all<{
+        id: string;
+        keyword: string;
+        match_type: 'exact' | 'contains';
+        response_type: string;
+        response_content: string;
+        template_id: string | null;
+      }>();
+
     // postback の incoming 自体を messages_log に記録する。Rich Menu のタップで
     // 利用者が "コスト比較" などのアクションを起こした事実を chat 履歴で可視化する。
     // delivery_type='push' は厳密には push ではないが、incoming/non-test として
@@ -575,14 +593,24 @@ async function handleEvent(
       console.error('Failed to log incoming postback', err);
     }
 
-    if (await markHumanConversationNeedsReply(db, friend.id)) return;
+    try {
+      if (await markHumanConversationNeedsReply(db, friend.id)) return;
+    } catch (error) {
+      // Rolling-deploy compatibility: continue with the legacy automation path
+      // until the conversation-control migration is available everywhere.
+      console.warn('[webhook] conversation control unavailable', error instanceof Error ? error.message : 'unknown');
+    }
 
+    let postbackMatched = false;
+    let postbackReplyTokenConsumed = false;
     for (const rule of autoReplies.results) {
       const isMatch = rule.match_type === 'exact'
         ? postbackData === rule.keyword
         : postbackData.includes(rule.keyword);
 
       if (isMatch) {
+        postbackMatched = true;
+        if (rule.response_type === 'silent') break;
         try {
           const { resolveMetadata } = await import('../services/step-delivery.js');
           const resolvedMeta = await resolveMetadata(db, { user_id: (friend as unknown as Record<string, string | null>).user_id, metadata: (friend as unknown as Record<string, string | null>).metadata });
@@ -594,6 +622,7 @@ async function handleEvent(
           const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1], workerUrl);
           const replyMsg = buildMessage(resolved.messageType, expandedContent);
           await lineClient.replyMessage(event.replyToken, [replyMsg]);
+          postbackReplyTokenConsumed = true;
 
           // 送信ログ — Rich Menu 経由の Flex 応答もチャット詳細に残るようにする。
           // テキスト auto_reply (line ~390) と同じパターン。
@@ -604,23 +633,19 @@ async function handleEvent(
               `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
                VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'auto_reply', ?, ?)`,
             )
-          : undefined,
-      });
-
-    // イベントバス発火: 専用イベント postback_received。
-    // postback.data を text に載せることで、IF-THEN 自動化の keyword /
-    // keyword_exact 条件がリッチメニューのタップ（タグ付与等）に効く。
-    // message_received を流用しないのは意図的 — 流用すると既存インストールの
-    // message_received スコアリング・catch-all 自動化・送信 Webhook 購読者が
-    // メニュータップで誤発火し、条件側に source を見る術がないため。
-    // なお upsertChatOnMessage は呼ばない: メニュータップは自発メッセージでは
-    // ないので、未対応 inbox を汚さないのが正しい (テキスト経路との意図的な差分)。
+            .bind(crypto.randomUUID(), friend.id, replyPayload.messageType, replyPayload.content, lineAccountId ?? null, jstNow())
+            .run();
+        } catch (err) {
+          console.error('Failed to send postback reply', err);
+        }
+        break;
+      }
+    }
     await fireEvent(db, 'postback_received', {
       friendId: friend.id,
       eventData: { text: postbackData, matched: postbackMatched },
       replyToken: postbackReplyTokenConsumed ? undefined : event.replyToken,
     }, lineAccessToken, lineAccountId);
-
     return;
   }
 

@@ -174,20 +174,107 @@ export type FriendListParams = {
   handled?: 'unhandled'
 }
 
-// Keep the nickname fields explicit while older generated shared-package
-// declarations may still be present in a developer's node_modules cache.
-export type FriendWithTags = Friend & {
-  tags: Tag[]
-  lineDisplayName: string | null
-  managementNickname: string | null
+export type FriendWithTags = Friend & { tags: Tag[] }
+export type FollowerImportState = {
+  version: 1
+  capability: 'unknown' | 'available' | 'unavailable'
+  phase: 'not_started' | 'importing_ids' | 'hydrating_profiles' | 'completed'
+  eligibilityCheckedAt: string | null
+  startedAt: string | null
+  completedAt: string | null
+  updatedAt: string
+  received: number
+  imported: number
+  reactivated: number
+  claimedUnassigned: number
+  alreadyPresent: number
+  conflicts: number
+  invalid: number
+  profilesProcessed: number
+  profilesUpdated: number
+  profileErrors: number
+  lastError: string | null
 }
-export type FriendNicknameHistory = {
+export type FriendFormSubmission = {
   id: string
-  previousNickname: string | null
-  newNickname: string | null
-  changedByStaffId: string
-  changedByName: string
-  changedAt: string
+  formId: string
+  formName: string
+  fields: Array<{ name: string; label: string }>
+  data: Record<string, unknown>
+  createdAt: string
+}
+export type FriendDetail = FriendWithTags & { formSubmissions: FriendFormSubmission[] }
+export type MileageSummary = {
+  programId: string
+  programName: string
+  available: number
+  pending: number
+  lifetimeEarned: number
+  spent: number
+}
+export type MileageHistoryItem = {
+  id: string
+  entryType: 'grant' | 'reversal' | 'spend' | 'expiration' | 'adjustment'
+  status: 'pending' | 'available' | 'void'
+  amount: number
+  reason: string
+  source: string
+  sourceEventId: string | null
+  occurredAt: string
+}
+export type MileageRule = {
+  id: string
+  name: string
+  eventType: string
+  source: string | null
+  amount: number
+  initialStatus: 'pending' | 'available'
+  conditions: {
+    dailyCapActions?: number
+    uniquePerSubject?: boolean
+    uniquePerSubjectPerDay?: boolean
+    ignoreMultiplier?: boolean
+    beneficiary?: 'actor' | 'referrer'
+    uniquePerReferredFriend?: boolean
+    uniquePerReferredFriendPerSubject?: boolean
+  }
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+export type MileageAdminMember = {
+  identityKey: string
+  primaryFriendId: string
+  displayName: string
+  pictureUrl: string | null
+  accountCount: number
+  accountNames: string[]
+  available: number
+  pending: number
+  lifetimeEarned: number
+  actionCount: number
+  messageCount: number
+  linkClickCount: number
+  formCount: number
+  bookingCount: number
+  webinarCount: number
+  instagramCount: number
+  followingDays: number
+  unfollowCount: number
+  referralMiles: number
+  qualityReferralCount: number
+  lastActivityAt: string | null
+}
+export type MileageAdminOverview = {
+  summary: {
+    totalMembers: number
+    totalAvailable: number
+    activeMembers30d: number
+    totalActions: number
+    queuedEvents: number
+  }
+  members: MileageAdminMember[]
+  pagination: { total: number; limit: number; offset: number }
 }
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
@@ -202,6 +289,15 @@ export type QuotaUsage = {
   monthlyMessages: { used: number; max: number }
   exceeded: boolean
   noticeUrl: string | null
+}
+
+export type FriendNicknameHistory = {
+  id: string
+  previousNickname: string | null
+  newNickname: string | null
+  changedByStaffId: string
+  changedByName: string
+  changedAt: string
 }
 
 export const api = {
@@ -223,14 +319,11 @@ export const api = {
       )
     },
     get: (id: string) =>
-      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`),
-    updateManagementNickname: (id: string, nickname: string | null) =>
-      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}/management-nickname`, {
-        method: 'PUT',
-        body: JSON.stringify({ nickname }),
-      }),
-    nicknameHistory: (id: string) =>
-      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/nickname-history`),
+      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}`),
+    mileage: (id: string, limit = 10) =>
+      fetchApi<ApiResponse<{ summary: MileageSummary; history: MileageHistoryItem[] }>>(
+        `/api/friends/${id}/mileage?limit=${limit}`,
+      ),
     count: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<{ count: number }>>('/api/friends/count' + query)
@@ -248,6 +341,13 @@ export const api = {
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
         `/api/friends/${id}/rich-menu`,
       ),
+    updateManagementNickname: (id: string, managementNickname: string | null) =>
+      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}/management-nickname`, {
+        method: 'PATCH',
+        body: JSON.stringify({ managementNickname }),
+      }),
+    nicknameHistory: (id: string) =>
+      fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/management-nickname/history`),
   },
   tags: {
     /** withCounts で friendCount 付き (JOIN 集計 — タグ管理ページ用)。 */
@@ -1312,14 +1412,11 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ friendId }) },
       ),
 
-    setDefault: (groupId: string, confirmation: {
-      accountId: string;
-      menuName: string;
-      richMenuId: string;
-    }) => fetchApi<ApiResponse<{ richMenuId: string }>>(
-      `/api/rich-menu-groups/${groupId}/set-default`,
-      { method: 'POST', body: JSON.stringify(confirmation) },
-    ),
+    setDefault: (groupId: string, confirmation: { accountId: string; menuName: string; richMenuId: string }) =>
+      fetchApi<ApiResponse<{ richMenuId: string }>>(
+        `/api/rich-menu-groups/${groupId}/set-default`,
+        { method: 'POST', body: JSON.stringify(confirmation) },
+      ),
 
     clearDefault: (groupId: string) =>
       fetchApi<ApiResponse<{ fallback: string }>>(
@@ -1329,14 +1426,14 @@ export const api = {
 
     history: (groupId: string) =>
       fetchApi<ApiResponse<Array<{
-        id: string;
-        operation: string;
-        status: 'success' | 'error';
-        richMenuId: string | null;
-        before: unknown;
-        after: unknown;
-        errorMessage: string | null;
-        createdAt: string;
+        id: string
+        operation: string
+        status: 'success' | 'error'
+        richMenuId: string | null
+        before: unknown
+        after: unknown
+        errorMessage: string | null
+        createdAt: string
       }>>>(`/api/rich-menu-groups/${groupId}/history`),
 
     external: (accountId: string) =>
@@ -1381,7 +1478,9 @@ export const api = {
 
     applyToTag: (
       groupId: string,
-      params: { mode: 'bulk-link'; tagId: string },
+      params:
+        | { mode: 'bulk-link'; tagId: string | null }
+        | { mode: 'set-default' },
     ) =>
       fetchApi<
         ApiResponse<{ chunks: number; total: number; message?: string; mode?: string }>

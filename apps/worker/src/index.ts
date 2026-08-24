@@ -94,6 +94,16 @@ import adminUpdate from './routes/admin-update.js';
 import { rakuten } from './routes/rakuten.js';
 import { nextEngine, syncNextEngineRankings } from './routes/next-engine.js';
 import { iemotoVoice } from './routes/iemoto-voice.js';
+import { adminSso } from './routes/admin-sso.js';
+import { mediaInquiries } from './routes/media-inquiries.js';
+import { isLinkPreviewBot } from './lib/og-bot.js';
+import { buildOgHtml } from './lib/og-html.js';
+import { loginUnconfiguredPage } from './lib/login-unconfigured.js';
+import {
+  resolveOgForEvent,
+  resolveOgForForm,
+  resolveOgForAccount,
+} from './lib/og-resolver.js';
 
 export type Env = {
   Bindings: {
@@ -256,6 +266,10 @@ app.route('/', messageTemplates);
 app.route('/', dedupPreview);
 app.route('/', profileRefresh);
 app.route('/', richMenuGroups);
+app.route('/', webinarRoutes);
+app.route('/', instagramEngagement);
+// LINE Messaging API 互換プロキシ — 外部エージェントの直接送信を messages_log に残す
+app.route('/', lineProxy);
 app.route('/', rakuten);
 app.route('/', nextEngine);
 app.route('/', iemotoVoice);
@@ -972,15 +986,10 @@ async function scheduled(
   // processQueuedBroadcasts に拾われ、復旧レイテンシが 1 tick 縮む。recover は inline 送信を
   // 含まない高速処理なので、先に await しても他ジョブを starve させない。
   const { recoverStalledBroadcasts, recoverStuckDeliveries } = await import('@line-crm/db');
-  jobs.push(recoverStuckDeliveries(env.DB));
-  jobs.push(recoverStalledBroadcasts(env.DB));
-  jobs.push(processQueuedBroadcasts(env.DB, defaultLineClient, env.WORKER_URL));
-  jobs.push(checkAccountHealth(env.DB));
-  jobs.push(refreshLineAccessTokens(env.DB));
-  const { refreshConversationSla } = await import('./services/conversation-sla.js');
-  jobs.push(refreshConversationSla(env.DB));
-  const { recoverConversationOutbounds } = await import('./services/conversation-outbound.js');
-  jobs.push(recoverConversationOutbounds(env.DB, env.LINE_CHANNEL_ACCESS_TOKEN));
+  await Promise.allSettled([
+    recoverStalledBroadcasts(env.DB),
+    recoverStuckDeliveries(env.DB),
+  ]);
 
   // Booking / event-booking リマインドは時刻厳守 + 軽量 (数件/tick、上限100件) なので、
   // 重い配信・insight ジョブより先に実行する。以前は最後に置かれていたため、
@@ -1126,16 +1135,16 @@ async function scheduled(
   // Booking expirer — runs only on the 6h cron tick.
   if (event.cron === '0 */6 * * *') {
     try {
-      const state = await env.DB.prepare(
-        `SELECT last_synced_at FROM next_engine_sync_state WHERE id = 'default'`,
-      ).first<{ last_synced_at: string | null }>();
-      const lastSync = state?.last_synced_at ? Date.parse(state.last_synced_at) : 0;
-      if (!lastSync || Date.now() - lastSync >= 7 * 24 * 60 * 60 * 1000) {
-        const result = await syncNextEngineRankings(env);
-        console.log(`[next-engine-ranking] products=${result.products} eligible=${result.eligible}`);
+      const result = await enqueueFollowingMileageMilestones(env.DB, {
+        limitPerMilestone: 1000,
+      });
+      if (result.eventsCreated + result.queued > 0) {
+        console.log(
+          `[following-mileage] events=${result.eventsCreated} queued=${result.queued}`,
+        );
       }
     } catch (e) {
-      console.error('next-engine ranking sync error:', e);
+      console.error('following-mileage error:', e);
     }
 
     try {

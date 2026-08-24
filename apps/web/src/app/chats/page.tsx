@@ -64,6 +64,7 @@ type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
 type QueueFilter = 'all' | 'needs_action' | 'overdue' | 'unassigned' | 'mine' | 'human' | 'bot'
 
 const SHOW_RESOLVED_PREF_KEY = 'lh_chat_show_resolved'
+const CHAT_PAGE_SIZE = 100
 
 const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
   unread: { label: '未読', className: 'bg-red-100 text-red-700' },
@@ -390,12 +391,22 @@ export default function ChatsPage() {
   const sendLockRef = useRef(false)
   const chatListRefreshInFlightRef = useRef(false)
   const chatDetailRefreshInFlightRef = useRef(false)
+  const nextCursorRef = useRef<{ at: string; id: string } | null>(null)
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
   const [switchingHandlingMode, setSwitchingHandlingMode] = useState(false)
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const buildListParams = useCallback((cursor: { at: string; id: string } | null) => ({
+    status: statusFilter === 'all' ? undefined : statusFilter,
+    accountId: selectedAccountId || undefined,
+    unansweredOnly,
+    limit: CHAT_PAGE_SIZE,
+    beforeAt: cursor?.at,
+    beforeId: cursor?.id,
+  }), [selectedAccountId, statusFilter, unansweredOnly])
 
   const loadChats = useCallback(async (silent = false) => {
     if (silent && chatListRefreshInFlightRef.current) return

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-describe('052_friend_account_scope.sql', () => {
+describe('079_friend_account_scope.sql', () => {
   it('preserves existing relations and permits the same LINE user on two accounts', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
@@ -28,7 +28,7 @@ describe('052_friend_account_scope.sql', () => {
       INSERT INTO chats (id, friend_id) VALUES ('chat-existing', 'friend-souhonke');
     `);
 
-    db.exec(readFileSync(join(packageRoot, 'migrations', '052_friend_account_scope.sql'), 'utf8'));
+    db.exec(readFileSync(join(packageRoot, 'migrations', '079_friend_account_scope.sql'), 'utf8'));
     db.prepare(`
       INSERT INTO friends (id, line_user_id, line_platform_user_id, line_account_id, display_name)
       VALUES (?, ?, ?, ?, ?)
@@ -56,7 +56,7 @@ describe('052_friend_account_scope.sql', () => {
       );
       INSERT INTO friends VALUES ('friend-1', 'U-kataoka', 'souhonke');
     `);
-    db.exec(readFileSync(join(packageRoot, 'migrations', '052_friend_account_scope.sql'), 'utf8'));
+    db.exec(readFileSync(join(packageRoot, 'migrations', '079_friend_account_scope.sql'), 'utf8'));
 
     expect(() => db.prepare(`
       INSERT INTO friends (id, line_user_id, line_platform_user_id, line_account_id)

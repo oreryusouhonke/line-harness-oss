@@ -108,9 +108,13 @@ CREATE TABLE affiliates (
 );
 
 CREATE TABLE ai_service_health (
-  service_key TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'NORMAL' CHECK (status IN ('NORMAL','DEGRADED','OUTAGE')),
-  failure_count INTEGER NOT NULL DEFAULT 0, window_started_at TEXT, last_failure_at TEXT,
-  last_success_at TEXT, updated_at TEXT NOT NULL
+  service_key TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'NORMAL' CHECK (status IN ('NORMAL','DEGRADED','OUTAGE')),
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  window_started_at TEXT,
+  last_failure_at TEXT,
+  last_success_at TEXT,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE auto_replies (
@@ -255,43 +259,74 @@ CREATE TABLE chats (
   friend_id     TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
   operator_id   TEXT REFERENCES operators (id) ON DELETE SET NULL,
   status        TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'in_progress', 'resolved')),
-  handling_mode TEXT NOT NULL DEFAULT 'bot' CHECK (handling_mode IN ('bot', 'human')),
   notes         TEXT,
   last_message_at TEXT,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-, bot_state TEXT NOT NULL DEFAULT 'IDLE' CHECK (bot_state IN ('IDLE','CONSULTING','WAITING_CUSTOMER','HANDOFF_REQUESTED','PAUSED','CLOSED')), previous_bot_state TEXT, attention_status TEXT NOT NULL DEFAULT 'NONE' CHECK (attention_status IN ('NONE','NEEDS_REPLY','WAITING_CUSTOMER','WAITING_BUSINESS_HOURS','OVERDUE','URGENT','RESOLVED')), priority TEXT NOT NULL DEFAULT 'NORMAL' CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT')), assigned_staff_id TEXT, lock_owner_id TEXT, lock_expires_at TEXT, bot_generation INTEGER NOT NULL DEFAULT 0, last_customer_message_at TEXT, last_reply_at TEXT, next_action_at TEXT, available_at TEXT, version INTEGER NOT NULL DEFAULT 1, ai_consecutive_failures INTEGER NOT NULL DEFAULT 0, line_account_id TEXT);
+, line_account_id TEXT, handling_mode TEXT NOT NULL DEFAULT 'bot'
+  CHECK (handling_mode IN ('bot', 'human')), bot_state TEXT NOT NULL DEFAULT 'IDLE'
+  CHECK (bot_state IN ('IDLE','CONSULTING','WAITING_CUSTOMER','HANDOFF_REQUESTED','PAUSED','CLOSED')), previous_bot_state TEXT, attention_status TEXT NOT NULL DEFAULT 'NONE'
+  CHECK (attention_status IN ('NONE','NEEDS_REPLY','WAITING_CUSTOMER','WAITING_BUSINESS_HOURS','OVERDUE','URGENT','RESOLVED')), priority TEXT NOT NULL DEFAULT 'NORMAL'
+  CHECK (priority IN ('LOW','NORMAL','HIGH','URGENT')), assigned_staff_id TEXT, lock_owner_id TEXT, lock_expires_at TEXT, bot_generation INTEGER NOT NULL DEFAULT 0, last_customer_message_at TEXT, last_reply_at TEXT, next_action_at TEXT, available_at TEXT, version INTEGER NOT NULL DEFAULT 1, ai_consecutive_failures INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE conversation_audit_logs (
-  id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
-  action TEXT NOT NULL, actor_type TEXT NOT NULL, actor_id TEXT, request_id TEXT,
-  metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  request_id TEXT,
+  metadata TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE conversation_operation_keys (
-  idempotency_key TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-  operation_type TEXT NOT NULL, response_status INTEGER, response_body TEXT,
-  created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+  idempotency_key TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  operation_type TEXT NOT NULL,
+  response_status INTEGER,
+  response_body TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
 );
 
 CREATE TABLE conversation_outbound_messages (
-  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   sender_type TEXT NOT NULL CHECK (sender_type IN ('BOT','HUMAN','SYSTEM')),
-  message_type TEXT NOT NULL, content TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING','SENDING','SENT','FAILED','CANCELLED')),
-  idempotency_key TEXT NOT NULL UNIQUE, expected_control_mode TEXT NOT NULL CHECK (expected_control_mode IN ('bot','human')),
-  expected_version INTEGER NOT NULL, expected_bot_generation INTEGER NOT NULL,
-  delivery_type TEXT NOT NULL DEFAULT 'push' CHECK (delivery_type IN ('push','reply')), reply_token TEXT,
-  quote_token TEXT,
-  line_request_id TEXT, created_by TEXT, created_at TEXT NOT NULL, sent_at TEXT, failed_at TEXT,
-  failure_reason TEXT, retry_count INTEGER NOT NULL DEFAULT 0
-);
+  message_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING','SENDING','SENT','FAILED','CANCELLED')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  expected_control_mode TEXT NOT NULL CHECK (expected_control_mode IN ('bot','human')),
+  expected_version INTEGER NOT NULL,
+  expected_bot_generation INTEGER NOT NULL,
+  delivery_type TEXT NOT NULL DEFAULT 'push' CHECK (delivery_type IN ('push','reply')),
+  reply_token TEXT,
+  line_request_id TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL,
+  sent_at TEXT,
+  failed_at TEXT,
+  failure_reason TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0
+, quote_token TEXT);
 
 CREATE TABLE conversation_state_transitions (
-  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-  from_mode TEXT NOT NULL, to_mode TEXT NOT NULL, from_bot_state TEXT NOT NULL, to_bot_state TEXT NOT NULL,
-  reason TEXT NOT NULL, performed_by_type TEXT NOT NULL, performed_by_id TEXT, request_id TEXT NOT NULL,
-  from_version INTEGER NOT NULL, to_version INTEGER NOT NULL, created_at TEXT NOT NULL
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  from_mode TEXT NOT NULL,
+  to_mode TEXT NOT NULL,
+  from_bot_state TEXT NOT NULL,
+  to_bot_state TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  performed_by_type TEXT NOT NULL,
+  performed_by_id TEXT,
+  request_id TEXT NOT NULL,
+  from_version INTEGER NOT NULL,
+  to_version INTEGER NOT NULL,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE conversion_events (
@@ -520,9 +555,7 @@ CREATE TABLE friend_tags (
 CREATE TABLE friends (
   id               TEXT PRIMARY KEY,
   line_user_id     TEXT UNIQUE NOT NULL,
-  line_platform_user_id TEXT,
   display_name     TEXT,
-  management_nickname TEXT,
   picture_url      TEXT,
   status_message   TEXT,
   is_following     INTEGER NOT NULL DEFAULT 1,
@@ -537,12 +570,8 @@ CREATE TABLE friends (
   last_unfollowed_at TEXT,
   unfollow_count   INTEGER NOT NULL DEFAULT 0,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
-  updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
-  ref_code         TEXT,
-  metadata         TEXT NOT NULL DEFAULT '{}',
-  line_account_id  TEXT REFERENCES line_accounts(id),
-  first_tracked_link_id TEXT
-);
+  updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+, ref_code TEXT, metadata TEXT NOT NULL DEFAULT '{}', line_account_id TEXT REFERENCES line_accounts(id), first_tracked_link_id TEXT REFERENCES tracked_links (id) ON DELETE SET NULL, management_nickname TEXT, line_platform_user_id TEXT);
 
 CREATE TABLE google_calendar_connections (
   id            TEXT PRIMARY KEY,
@@ -668,9 +697,15 @@ CREATE TABLE line_accounts (
 , login_channel_id TEXT, login_channel_secret TEXT, liff_id TEXT, token_expires_at TEXT);
 
 CREATE TABLE line_webhook_events (
-  webhook_event_id TEXT PRIMARY KEY, line_account_id TEXT, event_type TEXT NOT NULL,
-  is_redelivery INTEGER NOT NULL DEFAULT 0, line_timestamp INTEGER, received_at TEXT NOT NULL,
-  processed_at TEXT, status TEXT NOT NULL DEFAULT 'PROCESSING' CHECK (status IN ('PROCESSING','PROCESSED','FAILED')),
+  webhook_event_id TEXT PRIMARY KEY,
+  line_account_id TEXT,
+  event_type TEXT NOT NULL,
+  is_redelivery INTEGER NOT NULL DEFAULT 0,
+  line_timestamp INTEGER,
+  received_at TEXT NOT NULL,
+  processed_at TEXT,
+  status TEXT NOT NULL DEFAULT 'PROCESSING'
+    CHECK (status IN ('PROCESSING','PROCESSED','FAILED')),
   failure_reason TEXT
 );
 
@@ -782,53 +817,8 @@ CREATE TABLE messages_log (
   delivery_type    TEXT CHECK (delivery_type IN ('push', 'reply', 'test')),
   source           TEXT,
   line_account_id  TEXT,
-  quote_token      TEXT,
-  deleted_at       TEXT,
-  deleted_by       TEXT,
   created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-, pii_types TEXT, contains_sensitive_data INTEGER NOT NULL DEFAULT 0, access_level TEXT NOT NULL DEFAULT 'STANDARD', retention_expires_at TEXT, line_message_id TEXT, webhook_event_id TEXT, line_timestamp INTEGER, context_group_id TEXT);
-
-CREATE TABLE next_engine_credentials (
-  id                 TEXT PRIMARY KEY CHECK (id = 'default'),
-  company_ne_id      TEXT,
-  company_name       TEXT,
-  access_token       TEXT NOT NULL,
-  refresh_token      TEXT NOT NULL,
-  access_token_end   TEXT,
-  refresh_token_end  TEXT,
-  updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-);
-
-CREATE TABLE next_engine_orders (
-  receive_order_id        TEXT PRIMARY KEY,
-  shop_id                 TEXT,
-  shop_cut_form_id        TEXT,
-  order_status            TEXT,
-  order_date              TEXT,
-  last_modified_date      TEXT,
-  raw_json                TEXT NOT NULL,
-  first_seen_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
-  last_seen_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-);
-
-CREATE TABLE next_engine_product_rankings (
-  rank          INTEGER PRIMARY KEY,
-  product_code  TEXT NOT NULL UNIQUE,
-  product_name  TEXT NOT NULL,
-  quantity      INTEGER NOT NULL DEFAULT 0,
-  order_count   INTEGER NOT NULL DEFAULT 0,
-  period_start  TEXT NOT NULL,
-  period_end    TEXT NOT NULL,
-  synced_at     TEXT NOT NULL
-, image_url TEXT, product_url TEXT);
-
-CREATE TABLE next_engine_sync_state (
-  id                  TEXT PRIMARY KEY CHECK (id = 'default'),
-  baseline_completed  INTEGER NOT NULL DEFAULT 0 CHECK (baseline_completed IN (0, 1)),
-  last_synced_at      TEXT,
-  last_result_json    TEXT,
-  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
-);
+, pii_types TEXT, contains_sensitive_data INTEGER NOT NULL DEFAULT 0, access_level TEXT NOT NULL DEFAULT 'STANDARD', retention_expires_at TEXT, line_message_id TEXT, webhook_event_id TEXT, line_timestamp INTEGER, context_group_id TEXT, quote_token TEXT, deleted_at TEXT, deleted_by TEXT);
 
 CREATE TABLE mileage_event_queue (
   engagement_event_id   TEXT PRIMARY KEY REFERENCES engagement_events(id) ON DELETE CASCADE,
@@ -891,6 +881,48 @@ CREATE TABLE mileage_rules (
   valid_until    TEXT,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE next_engine_credentials (
+  id                 TEXT PRIMARY KEY CHECK (id = 'default'),
+  company_ne_id      TEXT,
+  company_name       TEXT,
+  access_token       TEXT NOT NULL,
+  refresh_token      TEXT NOT NULL,
+  access_token_end   TEXT,
+  refresh_token_end  TEXT,
+  updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE TABLE next_engine_orders (
+  receive_order_id        TEXT PRIMARY KEY,
+  shop_id                 TEXT,
+  shop_cut_form_id        TEXT,
+  order_status            TEXT,
+  order_date              TEXT,
+  last_modified_date      TEXT,
+  raw_json                TEXT NOT NULL,
+  first_seen_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  last_seen_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE TABLE next_engine_product_rankings (
+  rank          INTEGER PRIMARY KEY,
+  product_code  TEXT NOT NULL UNIQUE,
+  product_name  TEXT NOT NULL,
+  quantity      INTEGER NOT NULL DEFAULT 0,
+  order_count   INTEGER NOT NULL DEFAULT 0,
+  period_start  TEXT NOT NULL,
+  period_end    TEXT NOT NULL,
+  synced_at     TEXT NOT NULL
+, image_url TEXT, product_url TEXT);
+
+CREATE TABLE next_engine_sync_state (
+  id                  TEXT PRIMARY KEY CHECK (id = 'default'),
+  baseline_completed  INTEGER NOT NULL DEFAULT 0 CHECK (baseline_completed IN (0, 1)),
+  last_synced_at      TEXT,
+  last_result_json    TEXT,
+  updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE TABLE notification_rules (
@@ -1002,17 +1034,17 @@ CREATE TABLE rich_menu_groups (
 );
 
 CREATE TABLE rich_menu_operation_logs (
-  id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL REFERENCES line_accounts(id) ON DELETE CASCADE,
-  group_id TEXT,
-  staff_id TEXT,
-  operation TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('success','error')),
-  richmenu_id TEXT,
-  before_json TEXT,
-  after_json TEXT,
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL REFERENCES line_accounts(id) ON DELETE CASCADE,
+  group_id      TEXT,
+  staff_id      TEXT,
+  operation     TEXT NOT NULL,
+  status        TEXT NOT NULL CHECK (status IN ('success','error')),
+  richmenu_id   TEXT,
+  before_json   TEXT,
+  after_json    TEXT,
   error_message TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+  created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
 CREATE TABLE rich_menu_pages (
@@ -1398,9 +1430,10 @@ CREATE INDEX idx_calendar_bookings_start ON calendar_bookings (start_at);
 
 CREATE INDEX idx_chats_assigned_staff ON chats(assigned_staff_id);
 
-CREATE INDEX idx_chats_control_queue ON chats(handling_mode, attention_status, priority, last_customer_message_at);
+CREATE INDEX idx_chats_control_queue
+  ON chats(handling_mode, attention_status, priority, last_customer_message_at);
 
-CREATE INDEX idx_chats_friend ON chats (friend_id);
+CREATE UNIQUE INDEX idx_chats_friend_unique ON chats (friend_id);
 
 CREATE INDEX idx_chats_lock_expiry ON chats(lock_expires_at);
 
@@ -1408,17 +1441,20 @@ CREATE INDEX idx_chats_operator ON chats (operator_id);
 
 CREATE INDEX idx_chats_status ON chats (status);
 
-CREATE UNIQUE INDEX idx_chats_unique_friend ON chats(friend_id);
+CREATE INDEX idx_conversation_audit_chat
+  ON conversation_audit_logs(conversation_id, created_at);
 
-CREATE INDEX idx_conversation_audit_chat ON conversation_audit_logs(conversation_id, created_at);
+CREATE INDEX idx_conversation_operation_expiry
+  ON conversation_operation_keys(expires_at);
 
-CREATE INDEX idx_conversation_operation_expiry ON conversation_operation_keys(expires_at);
+CREATE INDEX idx_conversation_outbound_pending
+  ON conversation_outbound_messages(status, created_at);
 
-CREATE INDEX idx_conversation_outbound_pending ON conversation_outbound_messages(status, created_at);
+CREATE INDEX idx_conversation_transition_chat
+  ON conversation_state_transitions(conversation_id, created_at);
 
-CREATE INDEX idx_conversation_transition_chat ON conversation_state_transitions(conversation_id, created_at);
-
-CREATE UNIQUE INDEX idx_conversation_transition_version ON conversation_state_transitions(conversation_id, to_version);
+CREATE UNIQUE INDEX idx_conversation_transition_version
+  ON conversation_state_transitions(conversation_id, to_version);
 
 CREATE INDEX idx_conversion_events_affiliate ON conversion_events (affiliate_code);
 
@@ -1483,15 +1519,20 @@ CREATE INDEX idx_friend_scores_friend ON friend_scores (friend_id);
 
 CREATE INDEX idx_friend_tags_tag_id ON friend_tags (tag_id);
 
-CREATE UNIQUE INDEX idx_friends_account_platform_user ON friends (line_account_id, line_platform_user_id);
+CREATE UNIQUE INDEX idx_friends_account_platform_user
+  ON friends(line_account_id, line_platform_user_id);
+
+CREATE INDEX idx_friends_follow_tenure ON friends(is_following, current_follow_started_at);
 
 CREATE INDEX idx_friends_ig_igsid ON friends (ig_igsid);
 
 CREATE INDEX idx_friends_line_user_id ON friends (line_user_id);
 
-CREATE INDEX idx_friends_management_nickname ON friends (management_nickname);
+CREATE INDEX idx_friends_management_nickname
+  ON friends(management_nickname);
 
-CREATE INDEX idx_friends_platform_user ON friends (line_platform_user_id);
+CREATE INDEX idx_friends_platform_user
+  ON friends(line_platform_user_id);
 
 CREATE INDEX idx_friends_user_id ON friends (user_id);
 
@@ -1511,7 +1552,8 @@ CREATE INDEX idx_iemoto_voice_messages_conversation ON iemoto_voice_messages(con
 CREATE INDEX idx_line_accounts_display_order
   ON line_accounts (display_order, created_at);
 
-CREATE INDEX idx_line_webhook_events_received ON line_webhook_events(received_at);
+CREATE INDEX idx_line_webhook_events_received
+  ON line_webhook_events(received_at);
 
 CREATE INDEX idx_link_clicks_friend ON link_clicks (friend_id);
 
@@ -1545,6 +1587,28 @@ CREATE INDEX idx_messages_log_friend_source ON messages_log (friend_id, source);
 CREATE INDEX idx_messages_log_visible_friend_created
   ON messages_log(friend_id, deleted_at, created_at);
 
+CREATE INDEX idx_mileage_event_queue_due
+  ON mileage_event_queue(status, available_at, created_at);
+
+CREATE INDEX idx_mileage_ledger_friend
+  ON mileage_ledger(program_id, beneficiary_friend_id, status, occurred_at DESC);
+
+CREATE UNIQUE INDEX idx_mileage_ledger_one_reversal
+  ON mileage_ledger(reverses_entry_id)
+  WHERE reverses_entry_id IS NOT NULL;
+
+CREATE INDEX idx_mileage_ledger_rule
+  ON mileage_ledger(program_id, mileage_rule_id, occurred_at DESC);
+
+CREATE INDEX idx_mileage_ledger_source
+  ON mileage_ledger(program_id, source, source_event_id);
+
+CREATE INDEX idx_mileage_ledger_user
+  ON mileage_ledger(program_id, beneficiary_user_id, status, occurred_at DESC);
+
+CREATE INDEX idx_mileage_rules_match
+  ON mileage_rules(program_id, event_type, source, is_active);
+
 CREATE INDEX idx_notifications_created ON notifications (created_at);
 
 CREATE INDEX idx_notifications_status ON notifications (status);
@@ -1565,9 +1629,11 @@ CREATE INDEX idx_rich_menu_areas_page     ON rich_menu_areas(page_id);
 
 CREATE INDEX idx_rich_menu_groups_account ON rich_menu_groups(account_id, status);
 
-CREATE INDEX idx_rich_menu_operation_logs_account ON rich_menu_operation_logs(account_id, created_at DESC);
+CREATE INDEX idx_rich_menu_operation_logs_account
+  ON rich_menu_operation_logs(account_id, created_at DESC);
 
-CREATE INDEX idx_rich_menu_operation_logs_group ON rich_menu_operation_logs(group_id, created_at DESC);
+CREATE INDEX idx_rich_menu_operation_logs_group
+  ON rich_menu_operation_logs(group_id, created_at DESC);
 
 CREATE INDEX idx_rich_menu_pages_group    ON rich_menu_pages(group_id, order_index);
 

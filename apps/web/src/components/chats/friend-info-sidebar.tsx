@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { api } from '@/lib/api'
+import { api, type MileageHistoryItem, type MileageSummary } from '@/lib/api'
 import ManagementNicknameEditor from '@/components/friends/management-nickname-editor'
 
 interface FriendDetail {

@@ -259,15 +259,35 @@ export async function updateFriendFollowStatus(
   isFollowing: boolean,
   lineAccountId?: string | null,
 ): Promise<void> {
+  const now = jstNow();
   const accountPredicate = lineAccountId === undefined
     ? ''
     : lineAccountId === null ? ' AND line_account_id IS NULL' : ' AND line_account_id = ?';
-  const stmt = db.prepare(
-    `UPDATE friends SET is_following = ?, updated_at = ? WHERE (line_platform_user_id = ? OR (line_platform_user_id IS NULL AND line_user_id = ?))${accountPredicate}`,
-  );
+  const userPredicate = '(line_platform_user_id = ? OR (line_platform_user_id IS NULL AND line_user_id = ?))';
+  const sql = isFollowing
+    ? `UPDATE friends
+          SET first_followed_at = COALESCE(first_followed_at, created_at),
+              current_follow_started_at = CASE
+                WHEN is_following = 0 OR current_follow_started_at IS NULL THEN ?
+                ELSE current_follow_started_at
+              END,
+              last_followed_at = CASE WHEN is_following = 0 THEN ? ELSE last_followed_at END,
+              is_following = 1, updated_at = ?
+        WHERE ${userPredicate}${accountPredicate}`
+    : `UPDATE friends
+          SET is_following = 0,
+              current_follow_started_at = NULL,
+              last_unfollowed_at = CASE WHEN is_following = 1 THEN ? ELSE last_unfollowed_at END,
+              unfollow_count = unfollow_count + CASE WHEN is_following = 1 THEN 1 ELSE 0 END,
+              updated_at = ?
+        WHERE ${userPredicate}${accountPredicate}`;
+  const stmt = db.prepare(sql);
+  const baseParams = isFollowing
+    ? [now, now, now, lineUserId, lineUserId]
+    : [now, now, lineUserId, lineUserId];
   await (lineAccountId !== undefined && lineAccountId !== null
-    ? stmt.bind(isFollowing ? 1 : 0, jstNow(), lineUserId, lineUserId, lineAccountId)
-    : stmt.bind(isFollowing ? 1 : 0, jstNow(), lineUserId, lineUserId)).run();
+    ? stmt.bind(...baseParams, lineAccountId)
+    : stmt.bind(...baseParams)).run();
 }
 
 /** Get merged metadata across all friend records sharing the same user_id (UUID). */
