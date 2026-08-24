@@ -291,6 +291,17 @@ export type QuotaUsage = {
   noticeUrl: string | null
 }
 
+export async function downloadApiFile(path: string): Promise<{ blob: Blob; fileName: string | null }> {
+  const res = await fetch(`${API_URL}${path}`, { credentials: 'include' })
+  if (!res.ok) throw new ApiError(res.status)
+  const disposition = res.headers.get('content-disposition') || ''
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  return {
+    blob: await res.blob(),
+    fileName: encodedName ? decodeURIComponent(encodedName) : null,
+  }
+}
+
 export type FriendNicknameHistory = {
   id: string
   previousNickname: string | null
@@ -1005,6 +1016,8 @@ export const api = {
       fetchApi<ApiResponse<{ messageId: string; deleted: boolean }>>(`/api/chats/${id}/messages/${messageId}`, {
         method: 'DELETE',
       }),
+    downloadMessage: (id: string, messageId: string) =>
+      downloadApiFile(`/api/chats/${id}/messages/${messageId}/content`),
     handoff: (id: string, expectedVersion: number, idempotencyKey: string, reason = 'manual_handoff') =>
       fetchApi<ApiResponse<{ mode: 'human'; version: number; botGeneration: number }>>(`/api/conversations/${id}/handoff`, {
         method: 'POST',

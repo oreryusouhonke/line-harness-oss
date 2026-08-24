@@ -554,6 +554,56 @@ chats.get('/api/chats/:id', async (c) => {
   }
 });
 
+chats.get('/api/chats/:id/messages/:messageId/content', async (c) => {
+  try {
+    const chat = await resolveOrCreateChat(c.env.DB, c.req.param('id'));
+    if (!chat) return c.json({ success: false, error: 'Chat not found' }, 404);
+
+    const message = await c.env.DB.prepare(
+      `SELECT m.line_message_id, m.content, m.message_type,
+              COALESCE(a.channel_access_token, '') AS channel_access_token
+         FROM messages_log m
+         LEFT JOIN line_accounts a ON a.id = m.line_account_id
+        WHERE m.id = ? AND m.friend_id = ? AND m.direction = 'incoming'
+          AND m.message_type IN ('file', 'audio', 'video') AND m.deleted_at IS NULL
+        LIMIT 1`,
+    ).bind(c.req.param('messageId'), chat.friend_id).first<{
+      line_message_id: string | null;
+      content: string;
+      message_type: string;
+      channel_access_token: string;
+    }>();
+    if (!message?.line_message_id) {
+      return c.json({ success: false, error: 'File content is unavailable' }, 404);
+    }
+
+    const accessToken = message.channel_access_token || c.env.LINE_CHANNEL_ACCESS_TOKEN;
+    const response = await fetch(
+      `https://api-data.line.me/v2/bot/message/${encodeURIComponent(message.line_message_id)}/content`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      console.error('LINE content download failed:', response.status);
+      return c.json({ success: false, error: 'LINE content is no longer available' }, response.status === 404 ? 404 : 502);
+    }
+
+    const fileNameMatch = message.content.match(/^\[ファイル:\s*(.+)]$/);
+    const fallbackName = `${message.message_type}-${message.line_message_id}`;
+    const fileName = (fileNameMatch?.[1] || fallbackName).replace(/[\r\n"\\]/g, '_');
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    return new Response(response.body, {
+      headers: {
+        'Content-Type': contentType,
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+        'Cache-Control': 'private, no-store',
+      },
+    });
+  } catch (err) {
+    console.error('GET chat message content error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
 async function handleControlOperation(
   c: Context<Env>,
   operation: 'handoff' | 'return',

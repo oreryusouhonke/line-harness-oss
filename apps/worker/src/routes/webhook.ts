@@ -707,10 +707,10 @@ async function handleEvent(
     const logId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
-         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, line_message_id, created_at)
+         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?, ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, msg.type, finalContent, lineAccountId, jstNow())
+      .bind(logId, friend.id, msg.type, finalContent, lineAccountId, msg.id, jstNow())
       .run();
     if (await markHumanConversationNeedsReply(db, friend.id)) return;
     if (msg.type === 'image' && await routeToSharedDesignBot(db, {
