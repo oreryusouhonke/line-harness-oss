@@ -351,6 +351,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   id={`customer-postal-code-${friend.id}`}
                   type="text"
                   inputMode="numeric"
+                  autoComplete="postal-code"
                   value={customerPostalCode}
                   onChange={(event) => {
                     setCustomerPostalCode(normalizePostalCode(event.target.value))
@@ -568,4 +569,5 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     </div>
   )
 }
+
 
