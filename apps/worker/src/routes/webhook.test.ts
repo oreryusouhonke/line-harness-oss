@@ -212,7 +212,7 @@ describe('POST /webhook — postback events', () => {
 
     const stmt = {
       bind: vi.fn(),
-      run: vi.fn().mockResolvedValue({}),
+      run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       all: vi.fn().mockResolvedValue({ results: [] }), // no auto_reply match
     };
     stmt.bind.mockReturnValue(stmt);
@@ -294,7 +294,7 @@ describe('POST /webhook — postback events', () => {
 
     const stmt = {
       bind: vi.fn(),
-      run: vi.fn().mockResolvedValue({}),
+      run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       all: vi.fn().mockResolvedValue({
         results: [
           {
@@ -406,7 +406,7 @@ describe('POST /webhook — first-contact existing friends', () => {
 
     const stmt = {
       bind: vi.fn(),
-      run: vi.fn().mockResolvedValue({}),
+      run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       all: vi.fn().mockResolvedValue({ results: [] }),
       first: vi.fn().mockResolvedValue(null),
     };
@@ -489,7 +489,7 @@ describe('POST /webhook — first-contact existing friends', () => {
     ['公式オンラインショップから来ました。', 'src-self'],
     ['SNS・広告から来ました。', 'src-ads'],
     ['その他から来ました。', 'src-other'],
-  ])('converts inflow source helper message %s into tag %s without logging a normal inbound message', async (incomingText, expectedTagId) => {
+  ])('stores inflow source helper message %s and attaches tag %s', async (incomingText, expectedTagId) => {
     vi.mocked(verifySignature).mockResolvedValue(true);
     vi.mocked(getFriendByLineUserId).mockResolvedValue({
       id: 'friend-1',
@@ -514,7 +514,7 @@ describe('POST /webhook — first-contact existing friends', () => {
 
     const genericStmt = {
       bind: vi.fn(),
-      run: vi.fn().mockResolvedValue({}),
+      run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
       all: vi.fn().mockResolvedValue({ results: [] }),
       first: vi.fn().mockResolvedValue(null),
     };
@@ -565,8 +565,11 @@ describe('POST /webhook — first-contact existing friends', () => {
     await processing;
 
     expect(addTagToFriend).toHaveBeenCalledWith(db, 'friend-1', expectedTagId);
-    expect(upsertChatOnMessage).not.toHaveBeenCalled();
+    expect(upsertChatOnMessage).toHaveBeenCalledWith(db, 'friend-1');
     expect(fireEvent).not.toHaveBeenCalled();
-    expect(vi.mocked(db.prepare).mock.calls.some(([sql]) => String(sql).includes('INSERT INTO messages_log'))).toBe(false);
+    expect(vi.mocked(db.prepare).mock.calls.some(([sql]) => {
+      const statement = String(sql);
+      return statement.includes('messages_log') && statement.includes("'incoming'");
+    })).toBe(true);
   });
 });

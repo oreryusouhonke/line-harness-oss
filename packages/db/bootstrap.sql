@@ -707,7 +707,7 @@ CREATE TABLE line_webhook_events (
   status TEXT NOT NULL DEFAULT 'PROCESSING'
     CHECK (status IN ('PROCESSING','PROCESSED','FAILED')),
   failure_reason TEXT
-);
+, payload_json TEXT, attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at TEXT);
 
 CREATE TABLE link_clicks (
   id TEXT PRIMARY KEY,
@@ -1555,6 +1555,9 @@ CREATE INDEX idx_line_accounts_display_order
 CREATE INDEX idx_line_webhook_events_received
   ON line_webhook_events(received_at);
 
+CREATE INDEX idx_line_webhook_events_retry
+  ON line_webhook_events(status, next_retry_at, received_at);
+
 CREATE INDEX idx_link_clicks_friend ON link_clicks (friend_id);
 
 CREATE INDEX idx_link_clicks_link ON link_clicks (tracked_link_id);
@@ -1583,6 +1586,10 @@ CREATE INDEX idx_messages_log_friend_direction_created ON messages_log (friend_i
 CREATE INDEX idx_messages_log_friend_id ON messages_log (friend_id);
 
 CREATE INDEX idx_messages_log_friend_source ON messages_log (friend_id, source);
+
+CREATE UNIQUE INDEX idx_messages_log_incoming_line_message
+  ON messages_log(line_account_id, line_message_id)
+  WHERE direction = 'incoming' AND line_message_id IS NOT NULL;
 
 CREATE INDEX idx_messages_log_visible_friend_created
   ON messages_log(friend_id, deleted_at, created_at);

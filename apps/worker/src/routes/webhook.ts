@@ -23,7 +23,12 @@ import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import { buildCouponSaleFlex } from '../services/coupon-sale-automation.js';
 import { handoffConversation } from '../services/conversation-control-store.js';
 import { dispatchConversationOutbound } from '../services/conversation-outbound.js';
-import { completeWebhookEvent, failWebhookEvent, reserveWebhookEvent } from '../services/line-webhook-dedup.js';
+import {
+  claimRetryableWebhookEvents,
+  completeWebhookEvent,
+  failWebhookEvent,
+  reserveWebhookEvent,
+} from '../services/line-webhook-dedup.js';
 import { redactSensitiveText } from '../services/sensitive-data.js';
 import { recordAiFailure, recordAiSuccess } from '../services/ai-service-health.js';
 import type { Env } from '../index.js';
@@ -300,20 +305,24 @@ webhook.post('/webhook', async (c) => {
 
   const lineClient = new LineClient(channelAccessToken);
 
+  // Persist every event before acknowledging LINE. If D1 is unavailable, a
+  // non-2xx response asks LINE to redeliver instead of silently losing the body.
+  const reservedEvents: WebhookEvent[] = [];
+  for (const event of body.events) {
+    try {
+      if (await reserveWebhookEvent(db, event, matchedAccountId)) reservedEvents.push(event);
+    } catch (error) {
+      console.error('[webhook] failed to persist event before acknowledgement', error);
+      return c.json({ status: 'retry_later' }, 503);
+    }
+  }
+
   // 非同期処理 — LINE は ~1s 以内のレスポンスを要求
   const processingPromise = (async () => {
     const proxyDispatch: HarnessProxyDispatch = (request) =>
       dispatchLineProxyLocally(request, c.env, c.executionCtx);
-    for (const event of body.events) {
+    for (const event of reservedEvents) {
       try {
-        let reserved = true;
-        try {
-          reserved = await reserveWebhookEvent(db, event, matchedAccountId);
-        } catch (error) {
-          // Rolling deploy safety only. Migration 049 is applied before this code in production.
-          console.warn('[webhook] durable dedup unavailable', error instanceof Error ? error.message : 'unknown');
-        }
-        if (!reserved) continue;
         await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL, c.env.IMAGES, proxyDispatch, c.env);
         try { await completeWebhookEvent(db, event.webhookEventId); } catch { /* non-fatal audit update */ }
       } catch (err) {
@@ -707,7 +716,7 @@ async function handleEvent(
     const logId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, line_message_id, created_at)
+        `INSERT OR IGNORE INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, line_message_id, created_at)
          VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?, ?)`,
       )
       .bind(logId, friend.id, msg.type, finalContent, lineAccountId, msg.id, jstNow())
@@ -752,17 +761,6 @@ async function handleEvent(
     const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
-    const inflowTagName = INFLOW_SOURCE_TAG_BY_MESSAGE[textMessage.text.trim()];
-    if (inflowTagName) {
-      const inflowTagId = await findTagIdByName(db, inflowTagName);
-      if (inflowTagId) {
-        await addTagToFriend(db, friend.id, inflowTagId);
-      } else {
-        console.warn(`[webhook] inflow source tag missing for "${textMessage.text}" -> ${inflowTagName}`);
-      }
-      return;
-    }
-
     const redactedIncoming = redactSensitiveText(textMessage.text);
     let incomingText = redactedIncoming.text;
     const now = jstNow();
@@ -771,7 +769,7 @@ async function handleEvent(
     // 受信メッセージをログに記録
     await db
       .prepare(
-        `INSERT INTO messages_log
+        `INSERT OR IGNORE INTO messages_log
          (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source,
           pii_types, contains_sensitive_data, access_level, line_message_id, webhook_event_id,
           line_timestamp, context_group_id, retention_expires_at, line_account_id, quote_token, created_at)
@@ -790,6 +788,22 @@ async function handleEvent(
 
     // Stop every automated text branch before forwarding or replying.
     if (await markHumanConversationNeedsReply(db, friend.id)) return;
+
+    // Flow-source helper messages still belong in the customer's conversation.
+    // Persist first, then attach the tag and mark the chat unread before stopping
+    // automation. The old early return attached the tag but silently discarded
+    // the inbound message from Harness.
+    const inflowTagName = INFLOW_SOURCE_TAG_BY_MESSAGE[textMessage.text.trim()];
+    if (inflowTagName) {
+      const inflowTagId = await findTagIdByName(db, inflowTagName);
+      if (inflowTagId) {
+        await addTagToFriend(db, friend.id, inflowTagId);
+      } else {
+        console.warn(`[webhook] inflow source tag missing for "${textMessage.text}" -> ${inflowTagName}`);
+      }
+      await upsertChatOnMessage(db, friend.id);
+      return;
+    }
 
     // 「デザイン作成」で開始した30分間だけ共通デザインBotへ中継する。
     // リッチメニューやWebhook所有権は変更せず、Harnessを単一の入口に保つ。
@@ -1142,6 +1156,73 @@ async function handleEvent(
 
     return;
   }
+}
+
+export async function retryFailedWebhookEvents(
+  env: Env['Bindings'],
+  executionCtx: ExecutionContext,
+  limit = 20,
+): Promise<{ claimed: number; processed: number; failed: number; alreadyStored: number }> {
+  const rows = await claimRetryableWebhookEvents(env.DB, limit);
+  if (rows.length === 0) return { claimed: 0, processed: 0, failed: 0, alreadyStored: 0 };
+
+  const accounts = await getLineAccounts(env.DB);
+  let processed = 0;
+  let failed = 0;
+  let alreadyStored = 0;
+
+  for (const row of rows) {
+    try {
+      const event = JSON.parse(row.payload_json) as WebhookEvent;
+
+      // A prior attempt may have persisted the customer message and then failed
+      // in a later automation. The chat is already safe; do not reply or fire
+      // side effects twice during recovery.
+      if (event.type === 'message') {
+        const stored = await env.DB.prepare(
+          `SELECT id FROM messages_log
+            WHERE direction = 'incoming'
+              AND (webhook_event_id = ? OR line_message_id = ?)
+            LIMIT 1`,
+        ).bind(event.webhookEventId || null, event.message.id).first<{ id: string }>();
+        if (stored) {
+          await completeWebhookEvent(env.DB, row.webhook_event_id);
+          alreadyStored++;
+          continue;
+        }
+      }
+
+      const account = row.line_account_id
+        ? accounts.find((candidate) => candidate.id === row.line_account_id && candidate.is_active)
+        : null;
+      const accessToken = account?.channel_access_token || env.LINE_CHANNEL_ACCESS_TOKEN;
+      if (!accessToken) throw new Error('LINE access token unavailable for webhook retry');
+
+      const proxyDispatch: HarnessProxyDispatch = (request) =>
+        dispatchLineProxyLocally(request, env, executionCtx);
+      await handleEvent(
+        env.DB,
+        new LineClient(accessToken),
+        event,
+        accessToken,
+        row.line_account_id,
+        env.WORKER_URL || env.WORKER_PUBLIC_URL,
+        env.LIFF_URL,
+        env.IMAGES,
+        proxyDispatch,
+        env,
+      );
+      await completeWebhookEvent(env.DB, row.webhook_event_id);
+      processed++;
+    } catch (error) {
+      failed++;
+      const reason = error instanceof Error ? error.message : 'unknown';
+      console.error('[webhook-retry] event failed', row.webhook_event_id, reason);
+      await failWebhookEvent(env.DB, row.webhook_event_id, reason);
+    }
+  }
+
+  return { claimed: rows.length, processed, failed, alreadyStored };
 }
 
 async function markHumanConversationNeedsReply(db: D1Database, friendId: string): Promise<boolean> {
