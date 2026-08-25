@@ -1,4 +1,5 @@
 export const SAGAWA_ADDRESS_LINE_MAX = 16
+export const SAGAWA_PHONE_NUMBER_MAX = 14
 
 export type SagawaAddressLines = [string, string, string]
 
@@ -14,6 +15,23 @@ export function normalizePostalCode(value: string): string {
 
 export function isValidPostalCode(value: string): boolean {
   return value === '' || /^\d{3}-\d{4}$/.test(value)
+}
+
+/** Keep only Sagawa-compatible half-width digits and hyphens. */
+export function normalizePhoneNumber(value: string): string {
+  return value
+    .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+    .replace(/[‐‑‒–—―ー−－]/g, '-')
+    .replace(/[^0-9-]/g, '')
+    .slice(0, SAGAWA_PHONE_NUMBER_MAX)
+}
+
+export function isValidPhoneNumber(value: string): boolean {
+  return value === '' || (
+    value.length <= SAGAWA_PHONE_NUMBER_MAX
+    && /^[0-9-]+$/.test(value)
+    && /\d/.test(value)
+  )
 }
 
 export function addressCharacterCount(value: string): number {
