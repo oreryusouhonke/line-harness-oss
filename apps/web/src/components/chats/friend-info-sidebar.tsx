@@ -3,6 +3,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { api, type MileageHistoryItem, type MileageSummary } from '@/lib/api'
 import ManagementNicknameEditor from '@/components/friends/management-nickname-editor'
+import {
+  SAGAWA_ADDRESS_LINE_MAX,
+  isSagawaAddressLine,
+  isValidPostalCode,
+  normalizePostalCode,
+  splitLegacyAddress,
+} from './customer-address'
 
 interface FriendDetail {
   id: string
@@ -52,7 +59,18 @@ const statusLabels: Record<NonNullable<ChatStatusInfo['status']>, { label: strin
 
 const CUSTOMER_FILE_PATH_KEY = 'customer_file_path'
 const CUSTOMER_ADDRESS_KEY = 'customer_address'
-const EDITABLE_CUSTOMER_METADATA_KEYS = new Set([CUSTOMER_FILE_PATH_KEY, CUSTOMER_ADDRESS_KEY])
+const CUSTOMER_POSTAL_CODE_KEY = 'customer_postal_code'
+const CUSTOMER_ADDRESS_LINE_KEYS = [
+  'customer_address_line1',
+  'customer_address_line2',
+  'customer_address_line3',
+] as const
+const EDITABLE_CUSTOMER_METADATA_KEYS = new Set([
+  CUSTOMER_FILE_PATH_KEY,
+  CUSTOMER_ADDRESS_KEY,
+  CUSTOMER_POSTAL_CODE_KEY,
+  ...CUSTOMER_ADDRESS_LINE_KEYS,
+])
 
 function metadataText(metadata: Record<string, unknown>, key: string): string {
   const value = metadata[key]
@@ -78,9 +96,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [customerFilePath, setCustomerFilePath] = useState('')
-  const [customerAddress, setCustomerAddress] = useState('')
+  const [customerPostalCode, setCustomerPostalCode] = useState('')
+  const [customerAddressLine1, setCustomerAddressLine1] = useState('')
+  const [customerAddressLine2, setCustomerAddressLine2] = useState('')
+  const [customerAddressLine3, setCustomerAddressLine3] = useState('')
   const [savedCustomerFilePath, setSavedCustomerFilePath] = useState('')
-  const [savedCustomerAddress, setSavedCustomerAddress] = useState('')
+  const [savedCustomerPostalCode, setSavedCustomerPostalCode] = useState('')
+  const [savedCustomerAddressLines, setSavedCustomerAddressLines] = useState<[string, string, string]>(['', '', ''])
   const [savingCustomerDetails, setSavingCustomerDetails] = useState(false)
   const [customerDetailsMessage, setCustomerDetailsMessage] = useState<{
     kind: 'success' | 'error'
@@ -105,12 +127,25 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
       if (res.success && res.data) {
         const loadedFriend = res.data as unknown as FriendDetail
         const loadedFilePath = metadataText(loadedFriend.metadata, CUSTOMER_FILE_PATH_KEY)
-        const loadedAddress = metadataText(loadedFriend.metadata, CUSTOMER_ADDRESS_KEY)
+        const loadedPostalCode = normalizePostalCode(metadataText(loadedFriend.metadata, CUSTOMER_POSTAL_CODE_KEY))
+        const legacyAddressLines = splitLegacyAddress(metadataText(loadedFriend.metadata, CUSTOMER_ADDRESS_KEY))
+        const hasStructuredAddress = CUSTOMER_ADDRESS_LINE_KEYS.some(
+          (key) => typeof loadedFriend.metadata[key] === 'string',
+        )
+        const loadedAddressLines: [string, string, string] = hasStructuredAddress
+          ? CUSTOMER_ADDRESS_LINE_KEYS.map(
+            (key) => metadataText(loadedFriend.metadata, key),
+          ) as [string, string, string]
+          : legacyAddressLines
         setFriend(loadedFriend)
         setCustomerFilePath(loadedFilePath)
-        setCustomerAddress(loadedAddress)
+        setCustomerPostalCode(loadedPostalCode)
+        setCustomerAddressLine1(loadedAddressLines[0])
+        setCustomerAddressLine2(loadedAddressLines[1])
+        setCustomerAddressLine3(loadedAddressLines[2])
         setSavedCustomerFilePath(loadedFilePath)
-        setSavedCustomerAddress(loadedAddress)
+        setSavedCustomerPostalCode(loadedPostalCode)
+        setSavedCustomerAddressLines(loadedAddressLines)
         setSavingCustomerDetails(false)
         setCustomerDetailsMessage(null)
       } else {
@@ -130,14 +165,38 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
 
     const targetFriendId = friend.id
     const nextFilePath = customerFilePath.trim()
-    const nextAddress = customerAddress.trim()
+    const nextPostalCode = normalizePostalCode(customerPostalCode)
+    const nextAddressLines: [string, string, string] = [
+      customerAddressLine1.trim(),
+      customerAddressLine2.trim(),
+      customerAddressLine3.trim(),
+    ]
+
+    if (!isValidPostalCode(nextPostalCode)) {
+      setCustomerDetailsMessage({ kind: 'error', text: '郵便番号は999-9999形式で入力してください' })
+      return
+    }
+    if (nextAddressLines.some((line) => !isSagawaAddressLine(line))) {
+      setCustomerDetailsMessage({ kind: 'error', text: '住所は各行16文字以内で入力してください' })
+      return
+    }
+    if (!nextAddressLines[0] && (nextPostalCode || nextAddressLines[1] || nextAddressLines[2])) {
+      setCustomerDetailsMessage({ kind: 'error', text: '住所1を入力してください' })
+      return
+    }
+
+    const combinedAddress = nextAddressLines.join('')
     setSavingCustomerDetails(true)
     setCustomerDetailsMessage(null)
 
     try {
       const res = await api.friends.updateMetadata(targetFriendId, {
         [CUSTOMER_FILE_PATH_KEY]: nextFilePath || null,
-        [CUSTOMER_ADDRESS_KEY]: nextAddress || null,
+        [CUSTOMER_POSTAL_CODE_KEY]: nextPostalCode || null,
+        [CUSTOMER_ADDRESS_LINE_KEYS[0]]: nextAddressLines[0] || null,
+        [CUSTOMER_ADDRESS_LINE_KEYS[1]]: nextAddressLines[1] || null,
+        [CUSTOMER_ADDRESS_LINE_KEYS[2]]: nextAddressLines[2] || null,
+        [CUSTOMER_ADDRESS_KEY]: combinedAddress || null,
       })
       if (!res.success || !res.data) {
         throw new Error((res as { error?: string }).error ?? '保存できませんでした')
@@ -152,9 +211,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
         : current)
       if (currentFriendIdRef.current === targetFriendId) {
         setCustomerFilePath(nextFilePath)
-        setCustomerAddress(nextAddress)
+        setCustomerPostalCode(nextPostalCode)
+        setCustomerAddressLine1(nextAddressLines[0])
+        setCustomerAddressLine2(nextAddressLines[1])
+        setCustomerAddressLine3(nextAddressLines[2])
         setSavedCustomerFilePath(nextFilePath)
-        setSavedCustomerAddress(nextAddress)
+        setSavedCustomerPostalCode(nextPostalCode)
+        setSavedCustomerAddressLines(nextAddressLines)
         setCustomerDetailsMessage({ kind: 'success', text: '保存しました' })
       }
     } catch (err) {
@@ -281,22 +344,51 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             <div className="p-4 space-y-3">
               <h4 className="text-[11px] font-medium text-gray-500">お客様情報</h4>
               <div>
-                <label htmlFor={`customer-address-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
-                  住所
+                <label htmlFor={`customer-postal-code-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
+                  郵便番号
                 </label>
-                <textarea
-                  id={`customer-address-${friend.id}`}
-                  value={customerAddress}
+                <input
+                  id={`customer-postal-code-${friend.id}`}
+                  type="text"
+                  inputMode="numeric"
+                  value={customerPostalCode}
                   onChange={(event) => {
-                    setCustomerAddress(event.target.value)
+                    setCustomerPostalCode(normalizePostalCode(event.target.value))
                     setCustomerDetailsMessage(null)
                   }}
-                  maxLength={500}
-                  rows={3}
-                  placeholder="例：東京都渋谷区○○1-2-3"
-                  className="w-full resize-y border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                  maxLength={8}
+                  placeholder="999-9999"
+                  aria-describedby={`customer-postal-code-help-${friend.id}`}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
+                <p id={`customer-postal-code-help-${friend.id}`} className="mt-1 text-[10px] text-gray-400">
+                  半角数字・ハイフンあり
+                </p>
               </div>
+              {[
+                { id: '1', label: '住所1', value: customerAddressLine1, setValue: setCustomerAddressLine1, required: true },
+                { id: '2', label: '住所2', value: customerAddressLine2, setValue: setCustomerAddressLine2, required: false },
+                { id: '3', label: '住所3', value: customerAddressLine3, setValue: setCustomerAddressLine3, required: false },
+              ].map((addressLine) => (
+                <div key={addressLine.id}>
+                  <label htmlFor={`customer-address-${addressLine.id}-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
+                    {addressLine.required && <span className="text-red-500 mr-0.5">*</span>}
+                    {addressLine.label}
+                  </label>
+                  <input
+                    id={`customer-address-${addressLine.id}-${friend.id}`}
+                    type="text"
+                    value={addressLine.value}
+                    onChange={(event) => {
+                      addressLine.setValue(event.target.value)
+                      setCustomerDetailsMessage(null)
+                    }}
+                    maxLength={SAGAWA_ADDRESS_LINE_MAX}
+                    placeholder={`全角${SAGAWA_ADDRESS_LINE_MAX}文字以内`}
+                    className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </div>
+              ))}
               <div>
                 <label htmlFor={`customer-file-path-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                   顧客ファイル／フォルダのパス
@@ -322,7 +414,10 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                     savingCustomerDetails
                     || (
                       customerFilePath.trim() === savedCustomerFilePath
-                      && customerAddress.trim() === savedCustomerAddress
+                      && customerPostalCode === savedCustomerPostalCode
+                      && customerAddressLine1.trim() === savedCustomerAddressLines[0]
+                      && customerAddressLine2.trim() === savedCustomerAddressLines[1]
+                      && customerAddressLine3.trim() === savedCustomerAddressLines[2]
                     )
                   }
                   className="px-2.5 py-1 rounded text-xs font-medium text-white disabled:opacity-40"
