@@ -357,6 +357,11 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ nickname }),
       }),
+    updateMetadata: (id: string, fields: Record<string, unknown>) =>
+      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}/metadata`, {
+        method: 'PUT',
+        body: JSON.stringify(fields),
+      }),
     nicknameHistory: (id: string) =>
       fetchApi<ApiResponse<FriendNicknameHistory[]>>(`/api/friends/${id}/nickname-history`),
   },

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api, type MileageHistoryItem, type MileageSummary } from '@/lib/api'
 import ManagementNicknameEditor from '@/components/friends/management-nickname-editor'
 
@@ -50,6 +50,15 @@ const statusLabels: Record<NonNullable<ChatStatusInfo['status']>, { label: strin
   resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
 }
 
+const CUSTOMER_FILE_PATH_KEY = 'customer_file_path'
+const CUSTOMER_ADDRESS_KEY = 'customer_address'
+const EDITABLE_CUSTOMER_METADATA_KEYS = new Set([CUSTOMER_FILE_PATH_KEY, CUSTOMER_ADDRESS_KEY])
+
+function metadataText(metadata: Record<string, unknown>, key: string): string {
+  const value = metadata[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 /** Render a metadata value safely as text. Objects/arrays → JSON, primitives → as-is. */
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return '-'
@@ -63,9 +72,20 @@ function renderValue(value: unknown): string {
 }
 
 export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }: Props) {
+  const currentFriendIdRef = useRef(friendId)
+  currentFriendIdRef.current = friendId
   const [friend, setFriend] = useState<FriendDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [customerFilePath, setCustomerFilePath] = useState('')
+  const [customerAddress, setCustomerAddress] = useState('')
+  const [savedCustomerFilePath, setSavedCustomerFilePath] = useState('')
+  const [savedCustomerAddress, setSavedCustomerAddress] = useState('')
+  const [savingCustomerDetails, setSavingCustomerDetails] = useState(false)
+  const [customerDetailsMessage, setCustomerDetailsMessage] = useState<{
+    kind: 'success' | 'error'
+    text: string
+  } | null>(null)
   type MileageState =
     | { kind: 'loading' }
     | { kind: 'error' }
@@ -83,7 +103,16 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     api.friends.get(friendId).then((res) => {
       if (cancelled) return
       if (res.success && res.data) {
-        setFriend(res.data as unknown as FriendDetail)
+        const loadedFriend = res.data as unknown as FriendDetail
+        const loadedFilePath = metadataText(loadedFriend.metadata, CUSTOMER_FILE_PATH_KEY)
+        const loadedAddress = metadataText(loadedFriend.metadata, CUSTOMER_ADDRESS_KEY)
+        setFriend(loadedFriend)
+        setCustomerFilePath(loadedFilePath)
+        setCustomerAddress(loadedAddress)
+        setSavedCustomerFilePath(loadedFilePath)
+        setSavedCustomerAddress(loadedAddress)
+        setSavingCustomerDetails(false)
+        setCustomerDetailsMessage(null)
       } else {
         setError((res as { error?: string }).error ?? '友だち情報を取得できませんでした')
       }
@@ -95,6 +124,50 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     })
     return () => { cancelled = true }
   }, [friendId])
+
+  async function saveCustomerDetails() {
+    if (!friend || savingCustomerDetails) return
+
+    const targetFriendId = friend.id
+    const nextFilePath = customerFilePath.trim()
+    const nextAddress = customerAddress.trim()
+    setSavingCustomerDetails(true)
+    setCustomerDetailsMessage(null)
+
+    try {
+      const res = await api.friends.updateMetadata(targetFriendId, {
+        [CUSTOMER_FILE_PATH_KEY]: nextFilePath || null,
+        [CUSTOMER_ADDRESS_KEY]: nextAddress || null,
+      })
+      if (!res.success || !res.data) {
+        throw new Error((res as { error?: string }).error ?? '保存できませんでした')
+      }
+
+      setFriend((current) => current?.id === targetFriendId
+        ? {
+          ...current,
+          ...(res.data as unknown as Partial<FriendDetail>),
+          formSubmissions: current.formSubmissions,
+        }
+        : current)
+      if (currentFriendIdRef.current === targetFriendId) {
+        setCustomerFilePath(nextFilePath)
+        setCustomerAddress(nextAddress)
+        setSavedCustomerFilePath(nextFilePath)
+        setSavedCustomerAddress(nextAddress)
+        setCustomerDetailsMessage({ kind: 'success', text: '保存しました' })
+      }
+    } catch (err) {
+      if (currentFriendIdRef.current === targetFriendId) {
+        setCustomerDetailsMessage({
+          kind: 'error',
+          text: err instanceof Error ? err.message : '保存に失敗しました',
+        })
+      }
+    } finally {
+      if (currentFriendIdRef.current === targetFriendId) setSavingCustomerDetails(false)
+    }
+  }
 
   useEffect(() => {
     if (!friendId) {
@@ -204,6 +277,67 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               />
             </div>
 
+            {/* Customer details stored separately from the LINE profile. */}
+            <div className="p-4 space-y-3">
+              <h4 className="text-[11px] font-medium text-gray-500">お客様情報</h4>
+              <div>
+                <label htmlFor={`customer-address-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
+                  住所
+                </label>
+                <textarea
+                  id={`customer-address-${friend.id}`}
+                  value={customerAddress}
+                  onChange={(event) => {
+                    setCustomerAddress(event.target.value)
+                    setCustomerDetailsMessage(null)
+                  }}
+                  maxLength={500}
+                  rows={3}
+                  placeholder="例：東京都渋谷区○○1-2-3"
+                  className="w-full resize-y border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div>
+                <label htmlFor={`customer-file-path-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
+                  顧客ファイル／フォルダのパス
+                </label>
+                <input
+                  id={`customer-file-path-${friend.id}`}
+                  type="text"
+                  value={customerFilePath}
+                  onChange={(event) => {
+                    setCustomerFilePath(event.target.value)
+                    setCustomerDetailsMessage(null)
+                  }}
+                  maxLength={1000}
+                  placeholder={'例：C:\\顧客管理\\横田和典'}
+                  className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={saveCustomerDetails}
+                  disabled={
+                    savingCustomerDetails
+                    || (
+                      customerFilePath.trim() === savedCustomerFilePath
+                      && customerAddress.trim() === savedCustomerAddress
+                    )
+                  }
+                  className="px-2.5 py-1 rounded text-xs font-medium text-white disabled:opacity-40"
+                  style={{ backgroundColor: '#06C755' }}
+                >
+                  {savingCustomerDetails ? '保存中...' : '保存'}
+                </button>
+                {customerDetailsMessage && (
+                  <p className={`text-[11px] ${customerDetailsMessage.kind === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                    {customerDetailsMessage.text}
+                  </p>
+                )}
+              </div>
+            </div>
+
             {/* Status / Operator */}
             {(chatStatus?.status || operatorName) && (
               <div className="p-4 space-y-2">
@@ -277,16 +411,18 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             </div>
 
             {/* Metadata custom fields */}
-            {friend.metadata && Object.keys(friend.metadata).length > 0 && (
+            {friend.metadata && Object.entries(friend.metadata).some(([key]) => !EDITABLE_CUSTOMER_METADATA_KEYS.has(key)) && (
               <div className="p-4">
                 <h4 className="text-[11px] font-medium text-gray-500 mb-2">友だち情報</h4>
                 <dl className="space-y-2 text-xs">
-                  {Object.entries(friend.metadata).map(([key, value]) => (
+                  {Object.entries(friend.metadata)
+                    .filter(([key]) => !EDITABLE_CUSTOMER_METADATA_KEYS.has(key))
+                    .map(([key, value]) => (
                     <div key={key}>
                       <dt className="text-[10px] text-gray-400 uppercase tracking-wide">{key}</dt>
                       <dd className="text-gray-700 mt-0.5 whitespace-pre-wrap break-words">{renderValue(value)}</dd>
                     </div>
-                  ))}
+                    ))}
                 </dl>
               </div>
             )}
