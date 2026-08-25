@@ -34,6 +34,7 @@ describe('isIemotoBotActive', () => {
 describe('isImportedLineHistory', () => {
   it('identifies only archived LINE history', () => {
     expect(isImportedLineHistory('line_history_import')).toBe(true)
+    expect(isImportedLineHistory('line_history_direct')).toBe(false)
     expect(isImportedLineHistory('user')).toBe(false)
     expect(isImportedLineHistory(undefined)).toBe(false)
   })

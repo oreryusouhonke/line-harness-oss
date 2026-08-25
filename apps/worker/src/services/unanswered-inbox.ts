@@ -82,14 +82,14 @@ const CANDIDATES_SQL = `
   WITH last_import AS (
     SELECT friend_id, MAX(created_at) AS imported_at
     FROM messages_log
-    WHERE source='line_history_import'
+    WHERE source IN ('line_history_import','line_history_direct')
     GROUP BY friend_id
   ),
   agg AS (
     SELECT
       ml.friend_id,
       MAX(CASE WHEN direction='incoming'
-                AND (source IS NULL OR source NOT IN ('postback','line_history_import'))
+                AND (source IS NULL OR source NOT IN ('postback','line_history_import','line_history_direct'))
                 AND (li.imported_at IS NULL OR ml.created_at > li.imported_at)
                THEN ml.created_at END) AS last_incoming,
       MAX(CASE WHEN direction='outgoing' AND source='manual' THEN ml.created_at END) AS last_manual,
@@ -131,7 +131,7 @@ const RECENT_INCOMINGS_SQL = `
   WITH last_import AS (
     SELECT friend_id, MAX(created_at) AS imported_at
     FROM messages_log
-    WHERE source='line_history_import'
+    WHERE source IN ('line_history_import','line_history_direct')
     GROUP BY friend_id
   ),
   last_manual AS (
@@ -145,7 +145,7 @@ const RECENT_INCOMINGS_SQL = `
   LEFT JOIN last_manual lm ON lm.friend_id = ml.friend_id
   LEFT JOIN last_import li ON li.friend_id = ml.friend_id
   WHERE ml.direction='incoming'
-    AND (ml.source IS NULL OR ml.source NOT IN ('postback','line_history_import'))
+    AND (ml.source IS NULL OR ml.source NOT IN ('postback','line_history_import','line_history_direct'))
     AND (li.imported_at IS NULL OR ml.created_at > li.imported_at)
     AND (lm.lm IS NULL OR ml.created_at > lm.lm)
   ORDER BY ml.friend_id, ml.created_at DESC
