@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest'
 import {
   addressCharacterCount,
   isSagawaAddressLine,
+  isValidPhoneNumber,
   isValidPostalCode,
+  normalizePhoneNumber,
   normalizePostalCode,
   splitLegacyAddress,
 } from './customer-address'
@@ -18,6 +20,15 @@ describe('Sagawa address formatting', () => {
     expect(isValidPostalCode('')).toBe(true)
     expect(isValidPostalCode('123-4567')).toBe(true)
     expect(isValidPostalCode('123-45')).toBe(false)
+  })
+
+  test('normalizes phone numbers and limits them to 14 characters', () => {
+    expect(normalizePhoneNumber('０９０ー１２３４ー５６７８')).toBe('090-1234-5678')
+    expect(normalizePhoneNumber('03 (1234) 5678')).toBe('0312345678')
+    expect(normalizePhoneNumber('1234567890123456')).toBe('12345678901234')
+    expect(isValidPhoneNumber('090-1234-5678')).toBe(true)
+    expect(isValidPhoneNumber('')).toBe(true)
+    expect(isValidPhoneNumber('---')).toBe(false)
   })
 
   test('counts and limits each address line to 16 characters', () => {
