@@ -46,7 +46,7 @@ describe('friend detail APIs', () => {
     )
   })
 
-  test('saves the customer address and file path as friend metadata', async () => {
+  test('saves the Sagawa-format customer address and file path as friend metadata', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { metadata: {} } }), {
         status: 200,
@@ -56,7 +56,11 @@ describe('friend detail APIs', () => {
     vi.stubGlobal('fetch', fetchMock)
     const { api } = await import('./api')
     const fields = {
-      customer_address: '東京都千代田区1-1',
+      customer_postal_code: '100-0005',
+      customer_address_line1: '東京都千代田区丸の内',
+      customer_address_line2: '一丁目1番1号',
+      customer_address_line3: null,
+      customer_address: '東京都千代田区丸の内一丁目1番1号',
       customer_file_path: 'C:\\顧客管理\\山田太郎',
     }
 
