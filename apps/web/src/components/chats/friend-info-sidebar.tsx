@@ -331,7 +331,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   {savingCustomerDetails ? '保存中...' : '保存'}
                 </button>
                 {customerDetailsMessage && (
-                  <p className={`text-[11px] ${customerDetailsMessage.kind === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                  <p role="status" aria-live="polite" className={`text-[11px] ${customerDetailsMessage.kind === 'success' ? 'text-green-600' : 'text-red-600'}`}>
                     {customerDetailsMessage.text}
                   </p>
                 )}
@@ -473,3 +473,4 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     </div>
   )
 }
+
