@@ -21,7 +21,8 @@ describe('enqueueHumanReply status transition', () => {
     const inboxSource = readSource('./unanswered-inbox.ts');
 
     expect(inboxSource.match(/line_history_import/g)?.length).toBeGreaterThanOrEqual(4);
-    expect(inboxSource).toContain("source NOT IN ('postback','line_history_import')");
+    expect(inboxSource.match(/line_history_direct/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(inboxSource).toContain("source NOT IN ('postback','line_history_import','line_history_direct')");
     expect(inboxSource).toContain('ml.created_at > li.imported_at');
   });
 
