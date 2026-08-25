@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-describe('friend management name API', () => {
+describe('friend detail APIs', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.restoreAllMocks()
@@ -43,6 +43,31 @@ describe('friend management name API', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       'https://api.example.com/api/friends/friend-1/nickname-history',
       expect.objectContaining({ credentials: 'include' }),
+    )
+  })
+
+  test('saves the customer address and file path as friend metadata', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { metadata: {} } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { api } = await import('./api')
+    const fields = {
+      customer_address: '東京都千代田区1-1',
+      customer_file_path: 'C:\\顧客管理\\山田太郎',
+    }
+
+    await api.friends.updateMetadata('friend-1', fields)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/api/friends/friend-1/metadata',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify(fields),
+      }),
     )
   })
 })
