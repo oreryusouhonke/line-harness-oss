@@ -33,7 +33,7 @@ import { sendBookingNotification } from './services/booking-notifier.js';
 import { DEFAULT_ACCOUNT_SETTINGS } from './services/booking-types.js';
 import { authMiddleware } from './middleware/auth.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
-import { webhook } from './routes/webhook.js';
+import { retryFailedWebhookEvents, webhook } from './routes/webhook.js';
 import { friends } from './routes/friends.js';
 import { tags } from './routes/tags.js';
 import { scenarios } from './routes/scenarios.js';
@@ -977,6 +977,19 @@ async function scheduled(
     }
   }
   const defaultLineClient = new LineClient(env.LINE_CHANNEL_ACCESS_TOKEN);
+
+  // Retry failed or interrupted LINE events before heavier scheduled work.
+  // This turns the webhook audit table into a durable ingestion queue.
+  try {
+    const result = await retryFailedWebhookEvents(env, ctx);
+    if (result.claimed > 0) {
+      console.log(
+        `[webhook-retry] claimed=${result.claimed} processed=${result.processed} already_stored=${result.alreadyStored} failed=${result.failed}`,
+      );
+    }
+  } catch (error) {
+    console.error('[webhook-retry] sweep failed', error);
+  }
 
   // 配信系は1回だけ実行（内部でfriendのline_account_idから正しいlineClientを動的解決）
   // 以前はアカウントごとにループしていたが、アカウントフィルタなしのDBクエリで

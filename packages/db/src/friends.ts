@@ -208,6 +208,8 @@ export async function upsertFriend(
         'pictureUrl' in input ? (input.pictureUrl ?? null) : existing.picture_url,
         'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
         now,
+        now,
+        now,
         existing.id,
       )
       .run();
@@ -218,14 +220,10 @@ export async function upsertFriend(
   const id = crypto.randomUUID();
   await db
     .prepare(
-      `INSERT INTO friends (id, line_user_id, line_platform_user_id, line_account_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-       ON CONFLICT(line_account_id, line_platform_user_id) DO UPDATE SET
-         display_name = excluded.display_name,
-         picture_url = excluded.picture_url,
-         status_message = excluded.status_message,
-         is_following = 1,
-         updated_at = excluded.updated_at`,
+      `INSERT OR IGNORE INTO friends
+       (id, line_user_id, line_platform_user_id, line_account_id, display_name, picture_url, status_message,
+        is_following, first_followed_at, current_follow_started_at, last_followed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -249,6 +247,35 @@ export async function upsertFriend(
   const persisted = await getFriendByLineUserId(db, input.lineUserId, input.lineAccountId);
   if (!persisted) {
     throw new Error('Failed to persist LINE friend');
+  }
+
+  // A concurrent webhook may have inserted the same account/user after the
+  // lookup above. Refresh that winner explicitly and return one stable row.
+  if (persisted.id !== id) {
+    await db.prepare(
+      `UPDATE friends
+          SET display_name = ?, picture_url = ?, status_message = ?,
+              first_followed_at = COALESCE(first_followed_at, created_at),
+              current_follow_started_at = CASE
+                WHEN is_following = 0 OR current_follow_started_at IS NULL THEN ?
+                ELSE current_follow_started_at
+              END,
+              last_followed_at = CASE
+                WHEN is_following = 0 THEN ?
+                ELSE COALESCE(last_followed_at, created_at)
+              END,
+              is_following = 1, updated_at = ?
+        WHERE id = ?`,
+    ).bind(
+      input.displayName ?? null,
+      input.pictureUrl ?? null,
+      input.statusMessage ?? null,
+      now,
+      now,
+      now,
+      persisted.id,
+    ).run();
+    return (await getFriendById(db, persisted.id))!;
   }
   return persisted;
 }
