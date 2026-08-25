@@ -203,12 +203,14 @@ export async function upsertFriend(
              updated_at = ?
          WHERE id = ?`,
       )
-      .bind(
+        .bind(
         'displayName' in input ? (input.displayName ?? null) : existing.display_name,
         'pictureUrl' in input ? (input.pictureUrl ?? null) : existing.picture_url,
-        'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
-        now,
-        existing.id,
+          'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
+          now,
+          now,
+          now,
+          existing.id,
       )
       .run();
 
@@ -219,8 +221,9 @@ export async function upsertFriend(
   await db
     .prepare(
       `INSERT OR IGNORE INTO friends
-       (id, line_user_id, line_platform_user_id, line_account_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+       (id, line_user_id, line_platform_user_id, line_account_id, display_name, picture_url, status_message,
+        is_following, first_followed_at, current_follow_started_at, last_followed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
