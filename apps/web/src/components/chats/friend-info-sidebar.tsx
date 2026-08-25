@@ -412,6 +412,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   id={`customer-phone-number-${friend.id}`}
                   type="tel"
                   inputMode="tel"
+                                    autoComplete="tel"
                   value={customerPhoneNumber}
                   onChange={(event) => {
                     setCustomerPhoneNumber(normalizePhoneNumber(event.target.value))
