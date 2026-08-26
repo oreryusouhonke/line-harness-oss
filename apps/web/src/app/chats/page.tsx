@@ -64,9 +64,8 @@ interface ChatDetail extends Chat {
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
-type QueueFilter = 'all' | 'needs_action' | 'overdue' | 'unassigned' | 'mine' | 'human' | 'bot'
+type QueueFilter = 'all' | 'needs_action'
 
-const SHOW_RESOLVED_PREF_KEY = 'lh_chat_show_resolved'
 const CHAT_PAGE_SIZE = 100
 const CHAT_MESSAGE_PAGE_SIZE = 25
 const CHAT_DETAIL_CACHE_SIZE = 30
@@ -378,12 +377,9 @@ export default function ChatsPage() {
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('all')
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  // SSR時はONで描画し、マウント後にブラウザへ保存した前回値を復元する。
-  const [showResolved, setShowResolved] = useState(true)
-  const [currentStaffId, setCurrentStaffId] = useState<string | null>(null)
   const statusFilterRef = useRef<StatusFilter>('all')
   const unansweredOnlyRef = useRef(false)
-  const [unansweredOnly, setUnansweredOnly] = useState(() => {
+  const [unansweredOnly] = useState(() => {
     if (typeof window === 'undefined') return false
     return new URLSearchParams(window.location.search).get('unanswered') === '1'
   })
@@ -393,16 +389,6 @@ export default function ChatsPage() {
     return () => window.clearTimeout(id)
   }, [searchInput])
 
-  // unansweredOnly 変更時に URL を書き戻す
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const urlParams = new URLSearchParams(window.location.search)
-    if (unansweredOnly) urlParams.set('unanswered', '1')
-    else urlParams.delete('unanswered')
-    const qs = urlParams.toString()
-    const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname
-    window.history.replaceState(null, '', url)
-  }, [unansweredOnly])
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMoreChats, setHasMoreChats] = useState(false)
@@ -516,21 +502,6 @@ export default function ChatsPage() {
       setLoadingMore(false)
     }
   }, [loadingMore, buildListParams])
-
-  // 旧「新規メッセージ」導線のために起動直後から800人＋タグを取得していたが、
-  // 現在その導線は表示されない。不要な最大800回超のD1読取を発生させない。
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(SHOW_RESOLVED_PREF_KEY)
-      if (saved === '0') setShowResolved(false)
-      if (saved === '1') setShowResolved(true)
-    } catch {
-      // localStorage unavailable
-    }
-  }, [])
-  useEffect(() => {
-    api.staff.me().then((res) => { if (res.success) setCurrentStaffId(res.data.id) }).catch(() => undefined)
-  }, [])
 
   // Keep refs in sync so setChats updater can read the latest filter without stale closure
   useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
@@ -1048,31 +1019,19 @@ export default function ChatsPage() {
     }
   }
 
-  const activeChats = showResolved ? chats : chats.filter((chat) => chat.status !== 'resolved')
   const normalizedSearch = searchQuery.toLocaleLowerCase('ja-JP')
   const searchedChats = normalizedSearch
-    ? activeChats.filter((chat) => (
+    ? chats.filter((chat) => (
         [chat.managementNickname, chat.lineDisplayName, chat.friendName]
           .some((name) => name?.toLocaleLowerCase('ja-JP').includes(normalizedSearch))
       ))
-    : activeChats
-  const visibleChats = searchedChats.filter((chat) => {
-    if (queueFilter === 'needs_action') return chat.status === 'unread'
-    if (queueFilter === 'overdue') return chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())
-    if (queueFilter === 'unassigned') return chat.handlingMode === 'human' && !chat.assignedStaffId
-    if (queueFilter === 'mine') return Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)
-    if (queueFilter === 'human') return chat.handlingMode === 'human'
-    if (queueFilter === 'bot') return isIemotoBotActive(chat)
-    return true
-  })
+    : chats
+  const visibleChats = queueFilter === 'needs_action'
+    ? searchedChats.filter((chat) => chat.status === 'unread')
+    : searchedChats
   const queueCounts = {
     all: searchedChats.length,
     needs_action: searchedChats.filter((chat) => chat.status === 'unread').length,
-    overdue: searchedChats.filter((chat) => chat.attentionStatus === 'OVERDUE' || Boolean(chat.nextActionAt && new Date(chat.nextActionAt).getTime() <= Date.now())).length,
-    unassigned: searchedChats.filter((chat) => chat.handlingMode === 'human' && !chat.assignedStaffId).length,
-    mine: searchedChats.filter((chat) => Boolean(currentStaffId && chat.assignedStaffId === currentStaffId)).length,
-    human: searchedChats.filter((chat) => chat.handlingMode === 'human').length,
-    bot: searchedChats.filter(isIemotoBotActive).length,
   }
 
   return (
@@ -1125,15 +1084,10 @@ export default function ChatsPage() {
             </div>
           </div>
           {/* Filter row */}
-          <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+          <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5">
             {([
               { key: 'all', label: '全て' },
               { key: 'needs_action', label: '🔴 要対応' },
-              { key: 'overdue', label: '⏰ 期限超過' },
-              { key: 'unassigned', label: '未担当' },
-              { key: 'mine', label: '自分の担当' },
-              { key: 'human', label: '🟠 有人対応' },
-              { key: 'bot', label: '🟢 Bot対応' },
             ] as { key: QueueFilter; label: string }[]).map((f) => (
               <button
                 key={f.key}
@@ -1148,32 +1102,6 @@ export default function ChatsPage() {
                 {f.label} {queueCounts[f.key]}
               </button>
             ))}
-            <label className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={showResolved}
-                onChange={(e) => {
-                  const checked = e.target.checked
-                  setShowResolved(checked)
-                  try {
-                    localStorage.setItem(SHOW_RESOLVED_PREF_KEY, checked ? '1' : '0')
-                  } catch {
-                    // localStorage unavailable
-                  }
-                }}
-                className="rounded"
-              />
-              解決済みを表示
-            </label>
-            <label className="flex flex-shrink-0 items-center gap-1 text-[11px] font-medium cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={unansweredOnly}
-                onChange={(e) => setUnansweredOnly(e.target.checked)}
-                className="rounded"
-              />
-              🔥 未対応のみ
-            </label>
           </div>
 
           {/* Chat List */}
