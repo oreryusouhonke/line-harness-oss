@@ -1005,10 +1005,16 @@ export const api = {
         '/api/chats?' + new URLSearchParams(query),
       )
     },
-    get: (id: string) =>
-      fetchApi<ApiResponse<Chat & { messages?: { id: string; content: string; senderType: string; createdAt: string }[] }>>(
-        `/api/chats/${id}`,
-      ),
+    get: (id: string, params?: { messageLimit?: number; beforeAt?: string; beforeId?: string }) => {
+      const query = new URLSearchParams()
+      if (params?.messageLimit !== undefined) query.set('messageLimit', String(params.messageLimit))
+      if (params?.beforeAt) query.set('beforeAt', params.beforeAt)
+      if (params?.beforeId) query.set('beforeId', params.beforeId)
+      const queryString = query.toString()
+      return fetchApi<ApiResponse<Chat & { messages?: { id: string; content: string; senderType: string; createdAt: string }[] }>>(
+        `/api/chats/${id}${queryString ? `?${queryString}` : ''}`,
+      )
+    },
     create: (data: { friendId: string; operatorId?: string | null }) =>
       fetchApi<ApiResponse<Chat>>('/api/chats', {
         method: 'POST',

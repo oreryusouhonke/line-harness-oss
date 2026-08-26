@@ -59,6 +59,7 @@ interface ChatDetail extends Chat {
   botGeneration: number
   botState: string
   attentionStatus: string
+  hasMoreMessages?: boolean
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
@@ -66,6 +67,8 @@ type QueueFilter = 'all' | 'needs_action' | 'overdue' | 'unassigned' | 'mine' | 
 
 const SHOW_RESOLVED_PREF_KEY = 'lh_chat_show_resolved'
 const CHAT_PAGE_SIZE = 100
+const CHAT_MESSAGE_PAGE_SIZE = 25
+const CHAT_DETAIL_CACHE_SIZE = 30
 
 const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
   unread: { label: '未読', className: 'bg-red-100 text-red-700' },
@@ -381,6 +384,7 @@ export default function ChatsPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMoreChats, setHasMoreChats] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false)
   const [error, setError] = useState('')
   const [messageContent, setMessageContent] = useState('')
   const [pendingImage, setPendingImage] = useState<ImageUploaderValue | null>(null)
@@ -390,7 +394,10 @@ export default function ChatsPage() {
   const [downloadingMessageId, setDownloadingMessageId] = useState<string | null>(null)
   const sendLockRef = useRef(false)
   const chatListRefreshInFlightRef = useRef(false)
-  const chatDetailRefreshInFlightRef = useRef(false)
+  const chatDetailRequestsRef = useRef(new Map<string, Promise<ChatDetail | null>>())
+  const chatDetailCacheRef = useRef(new Map<string, ChatDetail>())
+  const olderMessagesInFlightRef = useRef(false)
+  const selectedChatIdRef = useRef<string | null>(null)
   const chatRevisionRef = useRef<string | null>(null)
   const revisionRefreshInFlightRef = useRef(false)
   const nextCursorRef = useRef<{ at: string; id: string } | null>(null)
@@ -400,6 +407,8 @@ export default function ChatsPage() {
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => { selectedChatIdRef.current = selectedChatId }, [selectedChatId])
 
   const buildListParams = useCallback((cursor: { at: string; id: string } | null) => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
@@ -486,22 +495,43 @@ export default function ChatsPage() {
   useEffect(() => { unansweredOnlyRef.current = unansweredOnly }, [unansweredOnly])
 
   const loadChatDetail = useCallback(async (chatId: string, silent = false) => {
-    if (silent && chatDetailRefreshInFlightRef.current) return
-    chatDetailRefreshInFlightRef.current = true
+    const cached = chatDetailCacheRef.current.get(chatId)
     if (!silent) {
-      setDetailLoading(true)
+      if (cached) {
+        setChatDetail(cached)
+        setNotes(cached.notes || '')
+        setDetailLoading(false)
+      } else {
+        setChatDetail(null)
+        setDetailLoading(true)
+      }
       setError('')
     }
+
+    let request = chatDetailRequestsRef.current.get(chatId)
+    if (!request) {
+      request = api.chats.get(chatId, { messageLimit: CHAT_MESSAGE_PAGE_SIZE })
+        .then((res) => res.success ? res.data as unknown as ChatDetail : null)
+        .finally(() => { chatDetailRequestsRef.current.delete(chatId) })
+      chatDetailRequestsRef.current.set(chatId, request)
+    }
+
     try {
-      const res = await api.chats.get(chatId)
-      if (res.success) {
-        setChatDetail(res.data as unknown as ChatDetail)
-        setNotes((res.data as unknown as ChatDetail).notes || '')
+      const detail = await request
+      if (detail) {
+        chatDetailCacheRef.current.delete(chatId)
+        chatDetailCacheRef.current.set(chatId, detail)
+        if (chatDetailCacheRef.current.size > CHAT_DETAIL_CACHE_SIZE) {
+          const oldestKey = chatDetailCacheRef.current.keys().next().value
+          if (oldestKey) chatDetailCacheRef.current.delete(oldestKey)
+        }
+        if (selectedChatIdRef.current === chatId) {
+          setChatDetail(detail)
+          setNotes(detail.notes || '')
+        }
         return true
       } else {
-        // API は 200 で success:false を返す可能性 (例: 404 lookup)。詳細を画面に出す。
-        const errMsg = (res as { error?: string }).error ?? '不明なエラー'
-        if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
+        if (!silent) setError('チャット詳細の読み込みに失敗しました。')
         return false
       }
     } catch (err) {
@@ -510,10 +540,56 @@ export default function ChatsPage() {
       if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
       return false
     } finally {
-      chatDetailRefreshInFlightRef.current = false
-      if (!silent) setDetailLoading(false)
+      if (!silent && selectedChatIdRef.current === chatId) setDetailLoading(false)
     }
   }, [])
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!selectedChatId || !chatDetail?.hasMoreMessages || olderMessagesInFlightRef.current) return
+    const firstMessage = chatDetail.messages?.[0]
+    if (!firstMessage) return
+
+    const chatId = selectedChatId
+    const scrollElement = messagesScrollRef.current
+    const previousScrollHeight = scrollElement?.scrollHeight ?? 0
+    olderMessagesInFlightRef.current = true
+    setLoadingOlderMessages(true)
+    try {
+      const res = await api.chats.get(chatId, {
+        messageLimit: CHAT_MESSAGE_PAGE_SIZE,
+        beforeAt: firstMessage.createdAt,
+        beforeId: firstMessage.id,
+      })
+      if (!res.success || selectedChatIdRef.current !== chatId) return
+
+      const page = res.data as unknown as ChatDetail
+      setChatDetail((current) => {
+        if (!current || current.id !== chatId) return current
+        // 取得中にWebhook更新で最新25件が差し替わった場合、このカーソルの結果を
+        // そのまま連結すると境界に抜けが生じ得る。古い結果は捨て、次のスクロールで
+        // 新しい先頭メッセージを基準に取り直す。
+        if (current.messages?.[0]?.id !== firstMessage.id) return current
+        const existingIds = new Set((current.messages ?? []).map((message) => message.id))
+        const olderMessages = (page.messages ?? []).filter((message) => !existingIds.has(message.id))
+        const merged = {
+          ...current,
+          messages: [...olderMessages, ...(current.messages ?? [])],
+          hasMoreMessages: page.hasMoreMessages,
+        }
+        chatDetailCacheRef.current.set(chatId, merged)
+        return merged
+      })
+      window.requestAnimationFrame(() => {
+        const currentElement = messagesScrollRef.current
+        if (currentElement) currentElement.scrollTop += currentElement.scrollHeight - previousScrollHeight
+      })
+    } catch {
+      setError('過去のメッセージを読み込めませんでした。もう一度上へスクロールしてください。')
+    } finally {
+      olderMessagesInFlightRef.current = false
+      setLoadingOlderMessages(false)
+    }
+  }, [chatDetail, selectedChatId])
 
   useEffect(() => {
     loadChats()
@@ -532,7 +608,13 @@ export default function ChatsPage() {
 
   useEffect(() => {
     if (selectedChatId) {
-      loadChatDetail(selectedChatId)
+      const cachedDetail = chatDetailCacheRef.current.get(selectedChatId)
+      if (cachedDetail) {
+        setChatDetail(cachedDetail)
+        setNotes(cachedDetail.notes || '')
+        setDetailLoading(false)
+      }
+      void loadChatDetail(selectedChatId, Boolean(cachedDetail))
     } else {
       setChatDetail(null)
     }
@@ -543,7 +625,6 @@ export default function ChatsPage() {
   // 常時接続ではなく revision を使うため、スリープや一時切断後も次回確認で必ず追いつく。
   useEffect(() => {
     let cancelled = false
-    chatRevisionRef.current = null
 
     const refreshWhenChanged = async () => {
       if (document.visibilityState !== 'visible' || revisionRefreshInFlightRef.current) return
@@ -555,13 +636,17 @@ export default function ChatsPage() {
         if (cancelled || !revisionRes.success) return
 
         const nextRevision = revisionRes.data.revision
-        // 初回も revision を取得してから本文を読み直す。先に行われる初期読込との間に
-        // Webhook が届いても、基準値だけを進めて新着を取りこぼす競合を防ぐ。
-        if (chatRevisionRef.current !== null && chatRevisionRef.current === nextRevision) return
+        // 初回は監視の基準値だけを保存する。本文は選択時の処理が既に取得しているため、
+        // ここで再取得すると同じチャットへの重複通信になってしまう。
+        if (chatRevisionRef.current === null) {
+          chatRevisionRef.current = nextRevision
+          return
+        }
+        if (chatRevisionRef.current === nextRevision) return
 
         const [listUpdated, detailUpdated] = await Promise.all([
           loadChats(true),
-          selectedChatId ? loadChatDetail(selectedChatId, true) : Promise.resolve(true),
+          selectedChatIdRef.current ? loadChatDetail(selectedChatIdRef.current, true) : Promise.resolve(true),
         ])
         if (!cancelled && listUpdated && detailUpdated) {
           chatRevisionRef.current = nextRevision
@@ -581,7 +666,11 @@ export default function ChatsPage() {
       window.clearInterval(id)
       document.removeEventListener('visibilitychange', refreshWhenChanged)
     }
-  }, [loadChatDetail, loadChats, selectedAccountId, selectedChatId])
+  }, [loadChatDetail, loadChats, selectedAccountId])
+
+  useEffect(() => {
+    chatRevisionRef.current = null
+  }, [selectedAccountId])
 
   // Surface deep-linked chats in the sidebar even when the current account
   // filter or status filter would exclude them — otherwise the user replies
@@ -656,7 +745,7 @@ export default function ChatsPage() {
       window.clearTimeout(id)
       el.removeEventListener('scroll', onScroll)
     }
-  }, [chatDetail?.id, chatDetail?.messages?.length])
+  }, [chatDetail?.id, chatDetail?.messages?.[chatDetail.messages.length - 1]?.id])
 
   // Auto-resize textarea as messageContent grows
   useEffect(() => {
@@ -1164,7 +1253,7 @@ export default function ChatsPage() {
             <div className="flex-1 flex items-center justify-center">
               <p className="text-gray-400 text-sm">チャットを選択してください</p>
             </div>
-          ) : detailLoading ? (
+          ) : detailLoading || !chatDetail || chatDetail.id !== selectedChatId ? (
             <div className="flex-1 flex items-center justify-center">
               <p className="text-gray-400 text-sm">読み込み中...</p>
             </div>
@@ -1268,7 +1357,29 @@ export default function ChatsPage() {
               </div>
 
               {/* Messages — LINE-style chat bubbles */}
-              <div ref={messagesScrollRef} className="flex-1 overflow-y-auto p-4 space-y-2" style={{ backgroundColor: '#7494C0' }}>
+              <div
+                ref={messagesScrollRef}
+                onScroll={(event) => {
+                  const element = event.currentTarget
+                  if (element.scrollHeight > element.clientHeight + 80 && element.scrollTop < 80) {
+                    void loadOlderMessages()
+                  }
+                }}
+                className="flex-1 overflow-y-auto p-4 space-y-2"
+                style={{ backgroundColor: '#7494C0' }}
+              >
+                {chatDetail.hasMoreMessages && (
+                  <div className="flex justify-center pb-2">
+                    <button
+                      type="button"
+                      onClick={() => { void loadOlderMessages() }}
+                      disabled={loadingOlderMessages}
+                      className="rounded-full bg-white/90 px-3 py-1 text-xs font-medium text-gray-600 shadow-sm hover:bg-white disabled:opacity-60"
+                    >
+                      {loadingOlderMessages ? '過去のメッセージを読み込み中...' : '以前のメッセージを読み込む'}
+                    </button>
+                  </div>
+                )}
                 {(!chatDetail.messages || chatDetail.messages.length === 0) ? (
                   <div className="text-center py-8">
                     <p className="text-white/60 text-sm">メッセージはまだありません。</p>
