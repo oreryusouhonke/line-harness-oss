@@ -344,6 +344,16 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
 
   if (!friendId) return null
 
+  const hasCustomerDeliveryInfo = [
+    customerPhoneNumber,
+    customerPostalCode,
+    customerAddressLine1,
+    customerAddressLine2,
+    customerAddressLine3,
+    customerRecipientNameLine1,
+    customerRecipientNameLine2,
+  ].some((value) => value.trim().length > 0)
+
   return (
     <div className="min-h-0 w-full lg:w-80 lg:flex-shrink bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
@@ -404,7 +414,28 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             {/* Customer details stored separately from the LINE profile. */}
             <div className="p-4 space-y-3">
               <h4 className="text-[11px] font-medium text-gray-500">お客様情報</h4>
-              <div>
+              <details key={friend.id} className="group overflow-hidden rounded-lg border border-gray-200 bg-gray-50/60">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-medium text-gray-700 hover:bg-gray-100 [&::-webkit-details-marker]:hidden">
+                  <span>電話番号・住所・宛名</span>
+                  <span className="flex items-center gap-2">
+                    {hasCustomerDeliveryInfo && (
+                      <span className="rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700">
+                        登録済み
+                      </span>
+                    )}
+                    <svg
+                      aria-hidden="true"
+                      className="h-4 w-4 text-gray-400 transition-transform group-open:rotate-180"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m19 9-7 7-7-7" />
+                    </svg>
+                  </span>
+                </summary>
+                <div className="space-y-3 border-t border-gray-200 bg-white p-3">
+                  <div>
                 <label htmlFor={`customer-phone-number-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                   電話番号
                 </label>
@@ -412,7 +443,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   id={`customer-phone-number-${friend.id}`}
                   type="tel"
                   inputMode="tel"
-                                    autoComplete="tel"
+                  autoComplete="tel"
                   value={customerPhoneNumber}
                   onChange={(event) => {
                     setCustomerPhoneNumber(normalizePhoneNumber(event.target.value))
@@ -422,8 +453,8 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   placeholder="半角数字14桁（ハイフンあり）以内"
                   className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
-              </div>
-              <div>
+                  </div>
+                  <div>
                 <label htmlFor={`customer-postal-code-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                   郵便番号
                 </label>
@@ -445,13 +476,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                 <p id={`customer-postal-code-help-${friend.id}`} className="mt-1 text-[10px] text-gray-400">
                   半角数字・ハイフンあり
                 </p>
-              </div>
+                  </div>
               {[
                 { id: '1', label: '住所1', value: customerAddressLine1, setValue: setCustomerAddressLine1, required: true },
                 { id: '2', label: '住所2', value: customerAddressLine2, setValue: setCustomerAddressLine2, required: false },
                 { id: '3', label: '住所3', value: customerAddressLine3, setValue: setCustomerAddressLine3, required: false },
               ].map((addressLine) => (
-                <div key={addressLine.id}>
+                    <div key={addressLine.id}>
                   <label htmlFor={`customer-address-${addressLine.id}-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                     {addressLine.required && <span className="text-red-500 mr-0.5">*</span>}
                     {addressLine.label}
@@ -468,13 +499,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                     placeholder={`全角${SAGAWA_ADDRESS_LINE_MAX}文字以内`}
                     className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
-                </div>
+                    </div>
               ))}
               {[
                 { id: '1', label: '宛名1', value: customerRecipientNameLine1, setValue: setCustomerRecipientNameLine1, required: true },
                 { id: '2', label: '宛名2', value: customerRecipientNameLine2, setValue: setCustomerRecipientNameLine2, required: false },
               ].map((recipientNameLine) => (
-                <div key={recipientNameLine.id}>
+                    <div key={recipientNameLine.id}>
                   <label htmlFor={`customer-recipient-name-${recipientNameLine.id}-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                     {recipientNameLine.required && <span className="text-red-500 mr-0.5">*</span>}
                     {recipientNameLine.label}
@@ -491,8 +522,10 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                     placeholder={`全角${SAGAWA_ADDRESS_LINE_MAX}文字以内`}
                     className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
-                </div>
+                    </div>
               ))}
+                </div>
+              </details>
               <div>
                 <label htmlFor={`customer-file-path-${friend.id}`} className="block text-[11px] font-medium text-gray-500 mb-1">
                   顧客ファイル／フォルダのパス
