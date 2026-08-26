@@ -1632,29 +1632,6 @@ export default function ChatsPage() {
         */}
         {(selectedChatId || selectedFriendId) && (
           <div className="hidden xl:flex w-80 flex-shrink-0 flex-col gap-3 min-h-0">
-            {selectedChatId && chatDetail && (
-              <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm space-y-3">
-                <div>
-                  <h3 className="mb-1.5 text-xs font-semibold text-gray-700">個別メモ</h3>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={notes}
-                      onChange={(e) => setNotes(e.target.value)}
-                      placeholder="メモを入力..."
-                      className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-green-500"
-                    />
-                    <button
-                      onClick={handleSaveNotes}
-                      disabled={savingNotes}
-                      className="rounded-md bg-gray-100 px-2 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      {savingNotes ? '保存中...' : '保存'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
             <FriendInfoSidebar
               friendId={selectedFriendId || selectedChatId}
               chatStatus={
