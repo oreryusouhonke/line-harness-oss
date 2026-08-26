@@ -33,19 +33,11 @@ export function redactSensitiveText(input: string): RedactionResult {
     types.add('phone');
     return '[電話番号は保護されました]';
   });
-  // Bare NNN-NNNN strings are common in order/reservation numbers. Require
-  // an explicit postal mark and never consume the customer's following text.
-  text = text.replace(/〒\s*\d{3}[-ー‐−]\d{4}/g, () => {
-    types.add('address');
-    return '[住所は保護されました]';
-  });
-  // Mask a Japanese street address as its own whitespace-delimited token.
-  // This avoids the old pattern that swallowed an arbitrary 60 characters of
-  // the customer's question after a postal code.
-  text = text.replace(/(?:東京都|北海道|(?:京都|大阪)府|[^\s、。]{2,3}県)[^\s、。]{1,40}/g, () => {
-    types.add('address');
-    return '[住所は保護されました]';
-  });
+  // 配送・注文対応では住所そのものが必要になるため、本文は置換しない。
+  // 個人情報を含むことだけ記録し、既存の保持期限・アクセス管理は維持する。
+  const containsPostalCode = /〒\s*\d{3}[-ー‐−]\d{4}/.test(text);
+  const containsJapaneseAddress = /(?:東京都|北海道|(?:京都|大阪)府|[^\s、。]{2,3}県)[^\s、。]{1,40}/.test(text);
+  if (containsPostalCode || containsJapaneseAddress) types.add('address');
 
   return { text, piiTypes: [...types], containsSensitiveData: types.size > 0 };
 }
