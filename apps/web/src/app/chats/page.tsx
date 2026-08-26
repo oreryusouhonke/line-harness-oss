@@ -11,6 +11,7 @@ import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
 import { isIemotoBotActive, isImportedLineHistory } from './chat-mode'
 import { resolveChatDisplayName } from './chat-display-name'
+import { readClientCache, writeClientCache } from '@/lib/client-cache'
 
 interface Chat {
   id: string
@@ -69,6 +70,29 @@ const SHOW_RESOLVED_PREF_KEY = 'lh_chat_show_resolved'
 const CHAT_PAGE_SIZE = 100
 const CHAT_MESSAGE_PAGE_SIZE = 25
 const CHAT_DETAIL_CACHE_SIZE = 30
+const CHAT_VIEW_CACHE_MAX_AGE = 12 * 60 * 60_000
+
+type ChatListCacheParams = {
+  status?: string
+  accountId?: string
+  search?: string
+  unansweredOnly?: boolean
+  limit?: number
+}
+
+function chatListCacheKey(params: ChatListCacheParams): string {
+  const query = new URLSearchParams()
+  if (params.status) query.set('status', params.status)
+  if (params.accountId) query.set('accountId', params.accountId)
+  if (params.search) query.set('search', params.search)
+  if (params.unansweredOnly) query.set('unansweredOnly', '1')
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  return `view:chats:list:${query.toString()}`
+}
+
+function chatDetailCacheKey(chatId: string): string {
+  return `view:chats:detail:${chatId}`
+}
 
 const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
   unread: { label: '未読', className: 'bg-red-100 text-red-700' },
@@ -423,24 +447,41 @@ export default function ChatsPage() {
   const loadChats = useCallback(async (silent = false) => {
     if (silent && chatListRefreshInFlightRef.current) return
     chatListRefreshInFlightRef.current = true
+    const params = buildListParams(null)
+    const cacheKey = chatListCacheKey(params)
+    const cached = silent
+      ? null
+      : readClientCache<Chat[]>(cacheKey, CHAT_VIEW_CACHE_MAX_AGE)
+
+    const applyRows = (rows: Chat[]) => {
+      setChats(rows)
+      const last = rows[rows.length - 1]
+      nextCursorRef.current = last?.lastMessageAt ? { at: last.lastMessageAt, id: last.id } : null
+      setHasMoreChats(!unansweredOnly && rows.length === CHAT_PAGE_SIZE)
+    }
+
     if (!silent) {
-      setLoading(true)
+      if (cached) {
+        // Paint the last known list before the network round trip, then replace
+        // it below with the authoritative D1 result.
+        applyRows(cached.value)
+        setLoading(false)
+      } else {
+        setLoading(true)
+      }
       setError('')
     }
     try {
-      const chatRes = await api.chats.list(buildListParams(null))
+      const chatRes = await api.chats.list(params)
       if (chatRes.success) {
         const rows = chatRes.data as unknown as Chat[]
-        setChats(rows)
-        const last = rows[rows.length - 1]
-        nextCursorRef.current = last?.lastMessageAt ? { at: last.lastMessageAt, id: last.id } : null
-        // ページ丁度いっぱい返ってきた = 続きがある可能性が高い (unansweredOnly は全件返る)
-        setHasMoreChats(!unansweredOnly && rows.length === CHAT_PAGE_SIZE)
+        applyRows(rows)
+        writeClientCache(cacheKey, rows)
         return true
       }
       return false
     } catch {
-      if (!silent) setError('チャットの読み込みに失敗しました。もう一度お試しください。')
+      if (!silent && !cached) setError('チャットの読み込みに失敗しました。もう一度お試しください。')
       return false
     } finally {
       chatListRefreshInFlightRef.current = false
@@ -495,7 +536,14 @@ export default function ChatsPage() {
   useEffect(() => { unansweredOnlyRef.current = unansweredOnly }, [unansweredOnly])
 
   const loadChatDetail = useCallback(async (chatId: string, silent = false) => {
-    const cached = chatDetailCacheRef.current.get(chatId)
+    let cached = chatDetailCacheRef.current.get(chatId)
+    if (!cached) {
+      const stored = readClientCache<ChatDetail>(chatDetailCacheKey(chatId), CHAT_VIEW_CACHE_MAX_AGE)
+      if (stored) {
+        cached = stored.value
+        chatDetailCacheRef.current.set(chatId, cached)
+      }
+    }
     if (!silent) {
       if (cached) {
         setChatDetail(cached)
@@ -521,6 +569,7 @@ export default function ChatsPage() {
       if (detail) {
         chatDetailCacheRef.current.delete(chatId)
         chatDetailCacheRef.current.set(chatId, detail)
+        writeClientCache(chatDetailCacheKey(chatId), detail)
         if (chatDetailCacheRef.current.size > CHAT_DETAIL_CACHE_SIZE) {
           const oldestKey = chatDetailCacheRef.current.keys().next().value
           if (oldestKey) chatDetailCacheRef.current.delete(oldestKey)
