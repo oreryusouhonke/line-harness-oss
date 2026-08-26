@@ -66,6 +66,7 @@ interface ChatDetail extends Chat {
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
 type QueueFilter = 'all' | 'needs_action'
 
+const CHAT_QUEUE_FILTER_PREF_KEY = 'lh_chat_queue_filter'
 const CHAT_PAGE_SIZE = 100
 const CHAT_MESSAGE_PAGE_SIZE = 25
 const CHAT_DETAIL_CACHE_SIZE = 30
@@ -388,6 +389,15 @@ export default function ChatsPage() {
     const id = window.setTimeout(() => setSearchQuery(searchInput.trim()), 250)
     return () => window.clearTimeout(id)
   }, [searchInput])
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CHAT_QUEUE_FILTER_PREF_KEY)
+      if (saved === 'all' || saved === 'needs_action') setQueueFilter(saved)
+    } catch {
+      // localStorage unavailable
+    }
+  }, [])
 
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -998,9 +1008,24 @@ export default function ChatsPage() {
   const handleSaveNotes = async () => {
     if (!selectedChatId) return
     setSavingNotes(true)
+    setError('')
     try {
-      await api.chats.update(selectedChatId, { notes })
-      loadChatDetail(selectedChatId)
+      const result = await api.chats.update(selectedChatId, { notes })
+      if (!result.success) throw new Error('save_failed')
+      const savedNotes = result.data.notes ?? notes
+      setNotes(savedNotes)
+      setChatDetail((current) => current && current.id === selectedChatId
+        ? { ...current, notes: savedNotes }
+        : current)
+      setChats((current) => current.map((chat) => chat.id === selectedChatId
+        ? { ...chat, notes: savedNotes }
+        : chat))
+      const cached = chatDetailCacheRef.current.get(selectedChatId)
+      if (cached) {
+        const updated = { ...cached, notes: savedNotes }
+        chatDetailCacheRef.current.set(selectedChatId, updated)
+        writeClientCache(chatDetailCacheKey(selectedChatId), updated)
+      }
     } catch {
       setError('メモの保存に失敗しました。')
     } finally {
@@ -1091,7 +1116,14 @@ export default function ChatsPage() {
             ] as { key: QueueFilter; label: string }[]).map((f) => (
               <button
                 key={f.key}
-                onClick={() => setQueueFilter(f.key)}
+                onClick={() => {
+                  setQueueFilter(f.key)
+                  try {
+                    localStorage.setItem(CHAT_QUEUE_FILTER_PREF_KEY, f.key)
+                  } catch {
+                    // localStorage unavailable
+                  }
+                }}
                 disabled={unansweredOnly}
                 className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
                   queueFilter === f.key
@@ -1573,9 +1605,13 @@ export default function ChatsPage() {
               friendId={selectedFriendId || selectedChatId}
               chatStatus={
                 chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
-                  ? { status: chatDetail.status, notes: chatDetail.notes }
+                  ? { notes: chatDetail.notes }
                   : undefined
               }
+              memoValue={chatDetail && chatDetail.id === selectedChatId ? notes : ''}
+              memoSaving={savingNotes}
+              onMemoChange={chatDetail && chatDetail.id === selectedChatId ? setNotes : undefined}
+              onMemoSave={chatDetail && chatDetail.id === selectedChatId ? handleSaveNotes : undefined}
             />
           </div>
         )}
