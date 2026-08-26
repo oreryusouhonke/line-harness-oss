@@ -84,6 +84,18 @@ describe('GET /api/chats list preview', () => {
       lastMessageDirection: 'outgoing',
     });
 
+    const etag = response.headers.get('etag');
+    expect(etag).toMatch(/^W\/"lh-chat-/);
+    expect(response.headers.get('cache-control')).toContain('must-revalidate');
+    const cachedResponse = await app.request(
+      new Request('http://worker.test/api/chats', {
+        headers: { 'If-None-Match': etag! },
+      }),
+      {},
+      { DB: db } as never,
+    );
+    expect(cachedResponse.status).toBe(304);
+
     const listSql = queries[0].sql;
     expect(listSql).toContain('FROM any_agg');
     expect(listSql).not.toContain('in_agg AS');

@@ -984,6 +984,12 @@ export const api = {
       ),
   },
   chats: {
+    revision: (params?: { accountId?: string }) => {
+      const query = params?.accountId
+        ? '?' + new URLSearchParams({ lineAccountId: params.accountId })
+        : ''
+      return fetchApi<ApiResponse<{ revision: string }>>(`/api/chats/revision${query}`)
+    },
     list: (params?: { status?: string; operatorId?: string; accountId?: string; search?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status

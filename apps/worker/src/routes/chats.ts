@@ -28,6 +28,61 @@ import { dispatchConversationOutbound } from '../services/conversation-outbound.
 
 const chats = new Hono<Env>();
 
+const CHAT_CACHE_CONTROL = 'private, no-cache, max-age=0, must-revalidate';
+
+function makeWeakEtag(parts: unknown[]): string {
+  const input = parts.map((part) => String(part ?? '')).join('|');
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `W/"lh-chat-${(hash >>> 0).toString(16)}"`;
+}
+
+function chatCacheHeaders(etag: string): Record<string, string> {
+  return {
+    'Cache-Control': CHAT_CACHE_CONTROL,
+    ETag: etag,
+    Vary: 'Authorization, Cookie',
+  };
+}
+
+async function getChatRevision(db: D1Database, lineAccountId?: string): Promise<string> {
+  const accountFilter = lineAccountId
+    ? {
+      chat: 'WHERE c.friend_id IN (SELECT id FROM friends WHERE line_account_id = ?)',
+      friend: 'WHERE line_account_id = ?',
+      message: 'WHERE line_account_id = ?',
+      bindings: [lineAccountId, lineAccountId, lineAccountId],
+    }
+    : { chat: '', friend: '', message: '', bindings: [] as string[] };
+
+  const row = await db.prepare(
+    `SELECT MAX(revision_value) AS revision FROM (
+       SELECT (
+         SELECT c.updated_at FROM chats c
+         ${accountFilter.chat}
+         ORDER BY c.updated_at DESC LIMIT 1
+       ) AS revision_value
+       UNION ALL
+       SELECT (
+         SELECT updated_at FROM friends
+         ${accountFilter.friend}
+         ORDER BY updated_at DESC LIMIT 1
+       )
+       UNION ALL
+       SELECT (
+         SELECT created_at FROM messages_log
+         ${accountFilter.message}
+         ORDER BY created_at DESC LIMIT 1
+       )
+     )`,
+  ).bind(...accountFilter.bindings).first<{ revision: string | null }>();
+
+  return row?.revision ?? '0';
+}
+
 function clampLoadingSeconds(value: number | undefined): number {
   const n = Number.isFinite(value) ? Math.floor(value as number) : 5;
   return Math.min(60, Math.max(5, n));
@@ -209,7 +264,12 @@ chats.get('/api/chats', async (c) => {
       unansweredMap = await getUnansweredRowsMap(c.env.DB);
       // 空 Map のとき = 未対応ゼロ。早期 return で空配列を返す。
       if (unansweredMap.size === 0) {
-        return c.json({ success: true, data: [] });
+        const etag = makeWeakEtag(['empty', c.req.url]);
+        const headers = chatCacheHeaders(etag);
+        if (c.req.header('if-none-match') === etag) {
+          return new Response(null, { status: 304, headers });
+        }
+        return c.json({ success: true, data: [] }, 200, headers);
       }
     }
 
@@ -440,9 +500,36 @@ chats.get('/api/chats', async (c) => {
         .sort((a, b) => String(b.lastMessageAt || '').localeCompare(String(a.lastMessageAt || '')));
     }
 
-    return c.json({ success: true, data });
+    const etag = makeWeakEtag([
+      c.req.url,
+      data.length,
+      ...data.map((row) => `${row.id}:${row.updatedAt}:${row.lastMessageAt}:${row.version}`),
+    ]);
+    const headers = chatCacheHeaders(etag);
+    if (c.req.header('if-none-match') === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+    return c.json({ success: true, data }, 200, headers);
   } catch (err) {
     console.error('GET /api/chats error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// チャット本文を毎回取り直さず、新着・状態変更の有無だけを確認する軽量API。
+// Webhook受信時は messages_log.created_at / chats.updated_at が進むため、画面は
+// revision が変わった場合だけ一覧と選択中の会話を再取得すればよい。
+chats.get('/api/chats/revision', async (c) => {
+  try {
+    const lineAccountId = c.req.query('lineAccountId') || undefined;
+    const revision = await getChatRevision(c.env.DB, lineAccountId);
+    return c.json(
+      { success: true, data: { revision } },
+      200,
+      { 'Cache-Control': 'private, no-store, max-age=0' },
+    );
+  } catch (err) {
+    console.error('GET /api/chats/revision error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
@@ -520,39 +607,55 @@ chats.get('/api/chats/:id', async (c) => {
       .all();
     messages.results = (messages.results as Record<string, unknown>[]).reverse();
 
-    return c.json({
-      success: true,
-      data: {
-        id: responseId,
-        friendId: resolvedFriendId,
-        friendName: friend?.display_name || '名前なし',
-        lineDisplayName: friend?.display_name || null,
-        managementNickname: friend?.management_nickname || null,
-        friendPictureUrl: friend?.picture_url || null,
-        operatorId,
-        status,
-        handlingMode,
-        version: control?.version ?? 1,
-        botGeneration: control?.bot_generation ?? 0,
-        botState: control?.bot_state ?? 'IDLE',
-        attentionStatus: control?.attention_status ?? 'NONE',
-        assignedStaffId: control?.assigned_staff_id ?? null,
-        lockOwnerId: control?.lock_owner_id ?? null,
-        lockExpiresAt: control?.lock_expires_at ?? null,
-        notes,
-        lastMessageAt,
-        createdAt,
-        messages: (messages.results as Record<string, unknown>[]).map((m) => ({
-          id: m.id,
-          direction: m.direction,
-          messageType: m.message_type,
-          content: m.content,
-          source: m.source || (m.direction === 'incoming' ? 'user' : 'manual'),
-          canQuote: m.direction === 'incoming' && Boolean(m.quote_token) && m.message_type === 'text',
-          createdAt: m.created_at,
-        })),
-      },
-    });
+    const data = {
+      id: responseId,
+      friendId: resolvedFriendId,
+      friendName: friend?.display_name || '名前なし',
+      lineDisplayName: friend?.display_name || null,
+      managementNickname: friend?.management_nickname || null,
+      friendPictureUrl: friend?.picture_url || null,
+      operatorId,
+      status,
+      handlingMode,
+      version: control?.version ?? 1,
+      botGeneration: control?.bot_generation ?? 0,
+      botState: control?.bot_state ?? 'IDLE',
+      attentionStatus: control?.attention_status ?? 'NONE',
+      assignedStaffId: control?.assigned_staff_id ?? null,
+      lockOwnerId: control?.lock_owner_id ?? null,
+      lockExpiresAt: control?.lock_expires_at ?? null,
+      notes,
+      lastMessageAt,
+      createdAt,
+      messages: (messages.results as Record<string, unknown>[]).map((m) => ({
+        id: m.id,
+        direction: m.direction,
+        messageType: m.message_type,
+        content: m.content,
+        source: m.source || (m.direction === 'incoming' ? 'user' : 'manual'),
+        canQuote: m.direction === 'incoming' && Boolean(m.quote_token) && m.message_type === 'text',
+        createdAt: m.created_at,
+      })),
+    };
+    const lastMessage = data.messages[data.messages.length - 1];
+    const etag = makeWeakEtag([
+      responseId,
+      data.version,
+      data.status,
+      data.handlingMode,
+      chatRow?.updated_at,
+      data.managementNickname,
+      data.notes,
+      data.messages.length,
+      lastMessage?.id,
+      lastMessage?.createdAt,
+    ]);
+    const headers = chatCacheHeaders(etag);
+    if (c.req.header('if-none-match') === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+
+    return c.json({ success: true, data }, 200, headers);
   } catch (err) {
     console.error('GET /api/chats/:id error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
@@ -838,6 +941,9 @@ chats.delete('/api/chats/:id/messages/:messageId', async (c) => {
        (id, conversation_id, action, actor_type, actor_id, request_id, metadata, created_at)
        VALUES (?, ?, 'MESSAGE_HIDDEN', 'STAFF', ?, ?, ?, ?)`,
     ).bind(crypto.randomUUID(), chat.id, staff.id, crypto.randomUUID(), JSON.stringify({ messageId }), now).run();
+    await c.env.DB.prepare(
+      `UPDATE chats SET updated_at = ? WHERE id = ?`,
+    ).bind(now, chat.id).run();
     return c.json({ success: true, data: { messageId, deleted: true } });
   } catch (err) {
     console.error('DELETE chat message error:', err);
