@@ -537,6 +537,12 @@ chats.get('/api/chats/revision', async (c) => {
 chats.get('/api/chats/:id', async (c) => {
   try {
     const rawId = c.req.param('id');
+    const requestedMessageLimit = Number.parseInt(c.req.query('messageLimit') || '25', 10);
+    const messageLimit = Number.isFinite(requestedMessageLimit)
+      ? Math.min(Math.max(requestedMessageLimit, 1), 100)
+      : 25;
+    const beforeAt = c.req.query('beforeAt') || null;
+    const beforeId = c.req.query('beforeId') || null;
 
     // id は chats.id または friend.id のどちらでもOK。
     // 優先順: chats.id 一致 → friend.id のとき chats.friend_id 最新行 → 何も無ければ friend のみで synthetic
@@ -592,20 +598,30 @@ chats.get('/api/chats/:id', async (c) => {
     const messageFriendIds = duplicateFriendRows.results.map((row) => row.id);
     const messageFriendPlaceholders = messageFriendIds.map(() => '?').join(',');
 
-    // 新しい1000件を取って昇順に戻す。LIMIT 200 ASC だと古い200件だけで broadcast/scenario 等の
-    // 新しい push が欠落していた（Shu で 481件中 281件欠落のバグあり）。一覧側と同様に test 配信は除外。
-    // 現状の最重量ユーザー(481件)の2倍バッファ。これ以上の履歴はページング未実装（Phase 2 TODO）。
+    // 初回は最新25件だけを返し、古い履歴は複合カーソルで追加取得する。
+    // created_at が同一のメッセージも id を第2ソートキーにすることで欠落・重複させない。
+    // limit + 1 件を問い合わせ、追加履歴の有無を余分な COUNT なしで判定する。
+    const messageCursorSql = beforeAt && beforeId
+      ? 'AND (created_at < ? OR (created_at = ? AND id < ?))'
+      : '';
+    const messageBindings: unknown[] = [...messageFriendIds];
+    if (beforeAt && beforeId) messageBindings.push(beforeAt, beforeAt, beforeId);
+    messageBindings.push(messageLimit + 1);
     const messages = await c.env.DB
       .prepare(
         `SELECT id, friend_id, direction, message_type, content, source, quote_token, created_at
          FROM messages_log
          WHERE friend_id IN (${messageFriendPlaceholders})
            AND deleted_at IS NULL AND (delivery_type IS NULL OR delivery_type != 'test')
-         ORDER BY created_at DESC LIMIT 1000`,
+           ${messageCursorSql}
+         ORDER BY created_at DESC, id DESC LIMIT ?`,
       )
-      .bind(...messageFriendIds)
+      .bind(...messageBindings)
       .all();
-    messages.results = (messages.results as Record<string, unknown>[]).reverse();
+    const hasMoreMessages = messages.results.length > messageLimit;
+    messages.results = (messages.results as Record<string, unknown>[])
+      .slice(0, messageLimit)
+      .reverse();
 
     const data = {
       id: responseId,
@@ -627,6 +643,7 @@ chats.get('/api/chats/:id', async (c) => {
       notes,
       lastMessageAt,
       createdAt,
+      hasMoreMessages,
       messages: (messages.results as Record<string, unknown>[]).map((m) => ({
         id: m.id,
         direction: m.direction,
@@ -646,6 +663,10 @@ chats.get('/api/chats/:id', async (c) => {
       chatRow?.updated_at,
       data.managementNickname,
       data.notes,
+      beforeAt,
+      beforeId,
+      messageLimit,
+      data.hasMoreMessages,
       data.messages.length,
       lastMessage?.id,
       lastMessage?.createdAt,
