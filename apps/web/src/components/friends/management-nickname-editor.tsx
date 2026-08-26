@@ -8,6 +8,7 @@ interface Props {
   friendId: string
   lineDisplayName: string | null
   managementNickname: string | null
+  showHistory?: boolean
   onSaved?: (nickname: string | null) => void
 }
 
@@ -19,6 +20,7 @@ export default function ManagementNicknameEditor({
   friendId,
   lineDisplayName,
   managementNickname,
+  showHistory = true,
   onSaved,
 }: Props) {
   const [value, setValue] = useState(managementNickname ?? '')
@@ -39,8 +41,8 @@ export default function ManagementNicknameEditor({
   useEffect(() => {
     setValue(managementNickname ?? '')
     setSavedValue(managementNickname ?? '')
-    void loadHistory()
-  }, [friendId, managementNickname])
+    if (showHistory) void loadHistory()
+  }, [friendId, managementNickname, showHistory])
 
   const save = async (nickname: string | null) => {
     setSaving(true)
@@ -52,7 +54,7 @@ export default function ManagementNicknameEditor({
       setValue(next)
       setSavedValue(next)
       onSaved?.(next || null)
-      await loadHistory()
+      if (showHistory) await loadHistory()
     } catch {
       setError('管理用顧客名の保存に失敗しました')
     } finally {
@@ -97,7 +99,7 @@ export default function ManagementNicknameEditor({
         )}
       </div>
       {error && <p className="text-[11px] text-red-600">{error}</p>}
-      {history.length > 0 && (
+      {showHistory && history.length > 0 && (
         <details className="pt-1">
           <summary className="text-[11px] text-gray-500 cursor-pointer">変更履歴 ({history.length})</summary>
           <ul className="mt-1 space-y-1 max-h-28 overflow-y-auto">

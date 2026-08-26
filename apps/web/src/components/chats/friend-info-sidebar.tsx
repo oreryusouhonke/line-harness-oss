@@ -375,34 +375,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
           <div className="p-4 text-xs text-red-600">{error}</div>
         ) : friend ? (
           <div className="divide-y divide-gray-100">
-            {/* Profile Header */}
-            <div className="p-4 flex items-start gap-3">
-              {friend.pictureUrl ? (
-                <img src={friend.pictureUrl} alt="" className="w-12 h-12 rounded-full flex-shrink-0" />
-              ) : (
-                <div className="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                  <span className="text-gray-500 text-base">{(friend.displayName || '?').charAt(0)}</span>
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-semibold text-gray-900 truncate">{friend.displayName || '名前なし'}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  登録日: {formatDate(friend.createdAt)}
-                </p>
-                {!friend.isFollowing && (
-                  <span className="inline-block mt-1 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
-                    ブロック済
-                  </span>
-                )}
-              </div>
-            </div>
-
             {/* Management-only nickname. Never changes the LINE profile name. */}
             <div className="p-4">
               <ManagementNicknameEditor
                 friendId={friend.id}
                 lineDisplayName={friend.lineDisplayName}
                 managementNickname={friend.managementNickname}
+                showHistory={false}
                 onSaved={(nickname) => setFriend((current) => current ? {
                   ...current,
                   managementNickname: nickname,
