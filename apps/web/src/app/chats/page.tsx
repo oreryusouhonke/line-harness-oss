@@ -378,8 +378,7 @@ export default function ChatsPage() {
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('all')
   const [searchInput, setSearchInput] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  // 個別チャットは全件表示が基本。解決済みを初期非表示にすると、移行済み37件のうち
-  // 要対応の1件だけが残り「チャットが消えた」ように見えるため、必ずONで開始する。
+  // SSR時はONで描画し、マウント後にブラウザへ保存した前回値を復元する。
   const [showResolved, setShowResolved] = useState(true)
   const [currentStaffId, setCurrentStaffId] = useState<string | null>(null)
   const statusFilterRef = useRef<StatusFilter>('all')
@@ -522,11 +521,13 @@ export default function ChatsPage() {
   // 現在その導線は表示されない。不要な最大800回超のD1読取を発生させない。
   useEffect(() => {
     try {
-      localStorage.setItem(SHOW_RESOLVED_PREF_KEY, showResolved ? '1' : '0')
+      const saved = localStorage.getItem(SHOW_RESOLVED_PREF_KEY)
+      if (saved === '0') setShowResolved(false)
+      if (saved === '1') setShowResolved(true)
     } catch {
       // localStorage unavailable
     }
-  }, [showResolved])
+  }, [])
   useEffect(() => {
     api.staff.me().then((res) => { if (res.success) setCurrentStaffId(res.data.id) }).catch(() => undefined)
   }, [])
@@ -1151,7 +1152,15 @@ export default function ChatsPage() {
               <input
                 type="checkbox"
                 checked={showResolved}
-                onChange={(e) => setShowResolved(e.target.checked)}
+                onChange={(e) => {
+                  const checked = e.target.checked
+                  setShowResolved(checked)
+                  try {
+                    localStorage.setItem(SHOW_RESOLVED_PREF_KEY, checked ? '1' : '0')
+                  } catch {
+                    // localStorage unavailable
+                  }
+                }}
                 className="rounded"
               />
               解決済みを表示

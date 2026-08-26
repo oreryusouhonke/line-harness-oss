@@ -54,12 +54,6 @@ function formatDate(iso: string | null): string {
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-const statusLabels: Record<NonNullable<ChatStatusInfo['status']>, { label: string; className: string }> = {
-  unread: { label: '未対応', className: 'bg-red-100 text-red-700' },
-  in_progress: { label: '対応中', className: 'bg-yellow-100 text-yellow-700' },
-  resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
-}
-
 const CUSTOMER_FILE_PATH_KEY = 'customer_file_path'
 const CUSTOMER_ADDRESS_KEY = 'customer_address'
 const CUSTOMER_POSTAL_CODE_KEY = 'customer_postal_code'
@@ -313,35 +307,6 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     return () => { cancelled = true }
   }, [friendId])
 
-  // リッチメニュー — loading / error / data を区別して、null=未設定 を取得失敗と
-  // 混同しないようにする。Codex review (P3) の指摘で導入。
-  type RichMenuState =
-    | { kind: 'loading' }
-    | { kind: 'error' }
-    | { kind: 'data'; id: string | null; name: string | null; isDefault: boolean }
-  const [richMenu, setRichMenu] = useState<RichMenuState>({ kind: 'loading' })
-
-  useEffect(() => {
-    if (!friendId) {
-      setRichMenu({ kind: 'loading' })
-      return
-    }
-    let cancelled = false
-    setRichMenu({ kind: 'loading' })
-    api.friends.richMenu(friendId).then((res) => {
-      if (cancelled) return
-      if (res.success && res.data) {
-        setRichMenu({ kind: 'data', ...res.data })
-      } else {
-        setRichMenu({ kind: 'error' })
-      }
-    }).catch(() => {
-      if (cancelled) return
-      setRichMenu({ kind: 'error' })
-    })
-    return () => { cancelled = true }
-  }, [friendId])
-
   if (!friendId) return null
 
   const hasCustomerDeliveryInfo = [
@@ -552,23 +517,13 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               </div>
             </div>
 
-            {/* Status / Operator */}
-            {(chatStatus?.status || operatorName) && (
+            {/* Operator */}
+            {operatorName && (
               <div className="p-4 space-y-2">
-                {chatStatus?.status && statusLabels[chatStatus.status] && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">対応状況</span>
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusLabels[chatStatus.status].className}`}>
-                      {statusLabels[chatStatus.status].label}
-                    </span>
-                  </div>
-                )}
-                {operatorName && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">担当者</span>
-                    <span className="text-xs text-gray-700">{operatorName}</span>
-                  </div>
-                )}
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] text-gray-500">担当者</span>
+                  <span className="text-xs text-gray-700">{operatorName}</span>
+                </div>
               </div>
             )}
 
@@ -599,27 +554,6 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                       {tag.name}
                     </span>
                   ))}
-                </div>
-              )}
-            </div>
-
-            {/* Rich Menu */}
-            <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">リッチメニュー</h4>
-              {richMenu.kind === 'loading' ? (
-                <p className="text-[11px] text-gray-400 italic">読み込み中...</p>
-              ) : richMenu.kind === 'error' ? (
-                <p className="text-[11px] text-red-500 italic">取得に失敗しました</p>
-              ) : richMenu.id === null ? (
-                <p className="text-[11px] text-gray-400 italic">未設定</p>
-              ) : (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-gray-700">{richMenu.name ?? '(名前なし)'}</span>
-                  {richMenu.isDefault && (
-                    <span className="px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
-                      デフォルト
-                    </span>
-                  )}
                 </div>
               )}
             </div>
