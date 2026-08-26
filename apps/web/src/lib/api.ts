@@ -33,6 +33,12 @@ import type {
   TrafficPool,
   PoolAccount,
 } from '@line-crm/shared'
+import {
+  clearClientCache,
+  invalidateClientCache,
+  readClientCache,
+  writeClientCache,
+} from './client-cache'
 
 /** Affiliate offer (案件) as returned by the worker. */
 export type AffiliateOffer = {
@@ -114,6 +120,53 @@ export function setCsrfToken(token: string | undefined | null): void {
 }
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+const API_CACHE_FRESH_MS = 20_000
+const API_CACHE_STALE_MS = 2 * 60_000
+const API_REFERENCE_CACHE_FRESH_MS = 2 * 60_000
+const API_REFERENCE_CACHE_STALE_MS = 10 * 60_000
+const apiGetRequests = new Map<string, Promise<unknown>>()
+
+const VOLATILE_GET_PATTERNS = [
+  /^\/api\/auth\//,
+  /^\/api\/chats(?:[/?]|$)/,
+  /^\/api\/inbox\//,
+  /^\/api\/notifications(?:[/?]|$)/,
+  /^\/api\/usage(?:[/?]|$)/,
+  /^\/api\/health(?:[/?]|$)/,
+  /^\/api\/admin\/update(?:[/?]|$)/,
+  /^\/api\/booking\/bookings(?:[/?]|$)/,
+  /^\/api\/events\/bookings(?:[/?]|$)/,
+  /^\/api\/conversions\/approvals(?:[/?]|$)/,
+  /\/progress(?:[/?]|$)/,
+  /\/status(?:[/?]|$)/,
+  /\/follower-import(?:[/?]|$)/,
+  /\/messages(?:[/?]|$)/,
+]
+
+const REFERENCE_GET_PATTERNS = [
+  /^\/api\/line-accounts(?:[/?]|$)/,
+  /^\/api\/tags(?:[/?]|$)/,
+  /^\/api\/templates(?:[/?]|$)/,
+  /^\/api\/scenarios(?:[/?]|$)/,
+  /^\/api\/automations(?:[/?]|$)/,
+  /^\/api\/auto-replies(?:[/?]|$)/,
+  /^\/api\/staff(?:[/?]|$)/,
+  /^\/api\/operators(?:[/?]|$)/,
+  /^\/api\/rich-menu-groups(?:[/?]|$)/,
+  /^\/api\/booking\/(?:menus|staff)(?:[/?]|$)/,
+]
+
+function apiCacheWindow(path: string): { freshMs: number; staleMs: number } {
+  if (REFERENCE_GET_PATTERNS.some((pattern) => pattern.test(path))) {
+    return { freshMs: API_REFERENCE_CACHE_FRESH_MS, staleMs: API_REFERENCE_CACHE_STALE_MS }
+  }
+  return { freshMs: API_CACHE_FRESH_MS, staleMs: API_CACHE_STALE_MS }
+}
+
+function canCacheApiGet(path: string, options: RequestInit | undefined): boolean {
+  if (options?.signal || options?.cache === 'no-store' || options?.headers) return false
+  return !VOLATILE_GET_PATTERNS.some((pattern) => pattern.test(path))
+}
 
 /**
  * Non-2xx API responses. message keeps the legacy `API error: <status>` shape
@@ -137,19 +190,61 @@ export async function fetchApi<T>(path: string, options?: RequestInit): Promise<
     const token = getCsrfToken()
     if (token) csrfHeaders['X-CSRF-Token'] = token
   }
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    // Send the HttpOnly session cookie with every request.
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...csrfHeaders,
-      ...options?.headers,
-    },
-  })
-  if (!res.ok) throw new ApiError(res.status)
-  if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
+  const cacheableGet = method === 'GET' && canCacheApiGet(path, options)
+  const cacheKey = `api:${path}`
+  const cacheWindow = apiCacheWindow(path)
+
+  const requestNetwork = async (): Promise<T> => {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      // Send the HttpOnly session cookie with every request.
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...csrfHeaders,
+        ...options?.headers,
+      },
+    })
+    if (!res.ok) {
+      if (res.status === 401) clearClientCache()
+      throw new ApiError(res.status)
+    }
+    if (res.status === 204) {
+      if (MUTATING_METHODS.has(method)) invalidateClientCache()
+      return undefined as T
+    }
+    const data = await res.json() as T
+    if (cacheableGet) {
+      writeClientCache(cacheKey, data)
+    } else if (MUTATING_METHODS.has(method)) {
+      // Any successful write may affect counts and related lists. Clearing all
+      // read entries favors correctness while the next visit warms them again.
+      invalidateClientCache()
+    }
+    return data
+  }
+
+  if (!cacheableGet) return requestNetwork()
+
+  const cached = readClientCache<T>(cacheKey, cacheWindow.staleMs)
+  if (cached && Date.now() - cached.savedAt <= cacheWindow.freshMs) return cached.value
+
+  const existing = apiGetRequests.get(cacheKey) as Promise<T> | undefined
+  if (cached) {
+    // Stale-while-revalidate: paint immediately, then refresh the cache for the
+    // next view. Live chat endpoints are deliberately excluded above.
+    if (!existing) {
+      const refresh = requestNetwork().finally(() => apiGetRequests.delete(cacheKey))
+      apiGetRequests.set(cacheKey, refresh)
+      void refresh.catch(() => undefined)
+    }
+    return cached.value
+  }
+
+  if (existing) return existing
+  const request = requestNetwork().finally(() => apiGetRequests.delete(cacheKey))
+  apiGetRequests.set(cacheKey, request)
+  return request
 }
 
 export type FriendListParams = {

@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
+import { clearClientCache, setClientCacheScope } from '@/lib/client-cache'
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -25,11 +26,13 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         if (!res.ok) throw new Error('unauthenticated')
         const data = await res.json()
         if (!data?.success || !data?.data) throw new Error('unauthenticated')
+        setClientCacheScope(String(data.data.id || data.data.email || data.data.name || 'staff'))
         if (data.data.name) localStorage.setItem('lh_staff_name', data.data.name)
         if (data.data.role) localStorage.setItem('lh_staff_role', data.data.role)
         if (data.csrfToken) localStorage.setItem('lh_csrf', data.csrfToken)
         if (!cancelled) setChecked(true)
       } catch {
+        clearClientCache()
         if (!cancelled) router.replace('/login')
       }
     }
