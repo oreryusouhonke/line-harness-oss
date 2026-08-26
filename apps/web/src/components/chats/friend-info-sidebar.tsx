@@ -36,14 +36,17 @@ interface FriendDetail {
 }
 
 interface ChatStatusInfo {
-  status: 'unread' | 'in_progress' | 'resolved' | null
   notes: string | null
 }
 
 interface Props {
   friendId: string | null
-  /** 親 (ChatDetail) が持っている chat 側の情報 — status / notes */
+  /** 親 (ChatDetail) が持っているチャットメモ */
   chatStatus?: ChatStatusInfo
+  memoValue?: string
+  memoSaving?: boolean
+  onMemoChange?: (value: string) => void
+  onMemoSave?: () => void
   /** 担当者名 (ChatDetail で operatorId → name 変換済を渡す想定) */
   operatorName?: string | null
 }
@@ -95,7 +98,15 @@ function renderValue(value: unknown): string {
   }
 }
 
-export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }: Props) {
+export default function FriendInfoSidebar({
+  friendId,
+  chatStatus,
+  memoValue = '',
+  memoSaving = false,
+  onMemoChange,
+  onMemoSave,
+  operatorName,
+}: Props) {
   const currentFriendIdRef = useRef(friendId)
   currentFriendIdRef.current = friendId
   const [friend, setFriend] = useState<FriendDetail | null>(null)
@@ -355,6 +366,31 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               />
             </div>
 
+            {onMemoChange && onMemoSave && (
+              <div className="p-4 space-y-2">
+                <label htmlFor={`customer-memo-${friend.id}`} className="block text-[11px] font-medium text-gray-500">
+                  メモ
+                </label>
+                <textarea
+                  id={`customer-memo-${friend.id}`}
+                  value={memoValue}
+                  onChange={(event) => onMemoChange(event.target.value)}
+                  rows={6}
+                  placeholder="お客様とのやり取りに必要なメモを入力..."
+                  className="min-h-28 w-full resize-y rounded border border-gray-300 px-2 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+                <button
+                  type="button"
+                  onClick={onMemoSave}
+                  disabled={memoSaving || memoValue === (chatStatus?.notes ?? '')}
+                  className="px-2.5 py-1 rounded text-xs font-medium text-white disabled:opacity-40"
+                  style={{ backgroundColor: '#06C755' }}
+                >
+                  {memoSaving ? '保存中...' : '保存'}
+                </button>
+              </div>
+            )}
+
             {/* Customer details stored separately from the LINE profile. */}
             <div className="p-4 space-y-3">
               <h4 className="text-[11px] font-medium text-gray-500">お客様情報</h4>
@@ -524,14 +560,6 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   <span className="text-[11px] text-gray-500">担当者</span>
                   <span className="text-xs text-gray-700">{operatorName}</span>
                 </div>
-              </div>
-            )}
-
-            {/* Notes */}
-            {chatStatus?.notes && (
-              <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">個別メモ</h4>
-                <p className="text-xs text-gray-700 whitespace-pre-wrap break-words">{chatStatus.notes}</p>
               </div>
             )}
 
