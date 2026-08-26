@@ -1441,6 +1441,9 @@ CREATE INDEX idx_chats_operator ON chats (operator_id);
 
 CREATE INDEX idx_chats_status ON chats (status);
 
+CREATE INDEX idx_chats_updated_at
+  ON chats(updated_at DESC);
+
 CREATE INDEX idx_conversation_audit_chat
   ON conversation_audit_logs(conversation_id, created_at);
 
@@ -1522,6 +1525,9 @@ CREATE INDEX idx_friend_tags_tag_id ON friend_tags (tag_id);
 CREATE UNIQUE INDEX idx_friends_account_platform_user
   ON friends(line_account_id, line_platform_user_id);
 
+CREATE INDEX idx_friends_account_updated_at
+  ON friends(line_account_id, updated_at DESC);
+
 CREATE INDEX idx_friends_follow_tenure ON friends(is_following, current_follow_started_at);
 
 CREATE INDEX idx_friends_ig_igsid ON friends (ig_igsid);
@@ -1576,6 +1582,9 @@ CREATE INDEX idx_meet_consultations_friend ON meet_consultations (friend_id);
 CREATE INDEX idx_meet_consultations_start ON meet_consultations (status, starts_at);
 
 CREATE INDEX idx_menus_account_sort ON menus (line_account_id, sort_order);
+
+CREATE INDEX idx_messages_log_account_created_at
+  ON messages_log(line_account_id, created_at DESC);
 
 CREATE INDEX idx_messages_log_broadcast_id ON messages_log(broadcast_id);
 

@@ -87,7 +87,8 @@
     "081_next_engine_ranking_images.sql",
     "082_next_engine_ranking_product_urls.sql",
     "083_message_delete_and_quote_reply.sql",
-    "084_line_webhook_retry_payload.sql"
+    "084_line_webhook_retry_payload.sql",
+    "085_chat_revision_indexes.sql"
   ],
-  "migrationCount": 88
+  "migrationCount": 89
 }

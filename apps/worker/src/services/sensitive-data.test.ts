@@ -15,15 +15,17 @@ describe('redactSensitiveText', () => {
   it('keeps business order numbers', () => {
     expect(redactSensitiveText('注文番号 ABC-1234567890123').text).toContain('ABC-1234567890123');
   });
-  it('protects phone numbers and postal addresses from normal display and AI', () => {
+  it('protects phone numbers but keeps postal addresses available for order handling', () => {
     const result = redactSensitiveText('電話: 090-1234-5678 〒123-4567 東京都千代田区1-2-3');
-    expect(result.text).not.toMatch(/090|123-4567|千代田区/);
+    expect(result.text).not.toContain('090-1234-5678');
+    expect(result.text).toContain('〒123-4567 東京都千代田区1-2-3');
     expect(result.piiTypes).toEqual(expect.arrayContaining(['phone', 'address']));
   });
   it('does not destroy order numbers or text following a postal code', () => {
     const order = redactSensitiveText('注文番号 123-4567 の商品はいつ届きますか？');
     expect(order.text).toBe('注文番号 123-4567 の商品はいつ届きますか？');
     const postal = redactSensitiveText('〒123-4567 東京都千代田区1-2-3 へ送ってください');
-    expect(postal.text).toBe('[住所は保護されました] [住所は保護されました] へ送ってください');
+    expect(postal.text).toBe('〒123-4567 東京都千代田区1-2-3 へ送ってください');
+    expect(postal.piiTypes).toContain('address');
   });
 });

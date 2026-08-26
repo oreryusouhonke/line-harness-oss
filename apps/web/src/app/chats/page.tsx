@@ -343,7 +343,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
 export default function ChatsPage() {
   const { selectedAccountId } = useAccount()
   const [chats, setChats] = useState<Chat[]>([])
-  const [allFriends, setAllFriends] = useState<FriendItem[]>([])
+  const [allFriends] = useState<FriendItem[]>([])
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
@@ -391,6 +391,8 @@ export default function ChatsPage() {
   const sendLockRef = useRef(false)
   const chatListRefreshInFlightRef = useRef(false)
   const chatDetailRefreshInFlightRef = useRef(false)
+  const chatRevisionRef = useRef<string | null>(null)
+  const revisionRefreshInFlightRef = useRef(false)
   const nextCursorRef = useRef<{ at: string; id: string } | null>(null)
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
@@ -425,9 +427,12 @@ export default function ChatsPage() {
         nextCursorRef.current = last?.lastMessageAt ? { at: last.lastMessageAt, id: last.id } : null
         // ページ丁度いっぱい返ってきた = 続きがある可能性が高い (unansweredOnly は全件返る)
         setHasMoreChats(!unansweredOnly && rows.length === CHAT_PAGE_SIZE)
+        return true
       }
+      return false
     } catch {
       if (!silent) setError('チャットの読み込みに失敗しました。もう一度お試しください。')
+      return false
     } finally {
       chatListRefreshInFlightRef.current = false
       if (!silent) setLoading(false)
@@ -463,18 +468,8 @@ export default function ChatsPage() {
     }
   }, [loadingMore, buildListParams])
 
-  // Friends list (for the "new direct message" modal) — loaded lazily in the background
-  // Previously fetched 800 friends in parallel with chats, which blocked the initial render.
-  const loadAllFriends = useCallback(async () => {
-    try {
-      const friendRes = await api.friends.list({ accountId: selectedAccountId || undefined, limit: '800' })
-      if (friendRes.success) {
-        setAllFriends((friendRes.data as unknown as { items: FriendItem[] }).items)
-      }
-    } catch { /* silent */ }
-  }, [selectedAccountId])
-
-  useEffect(() => { void loadAllFriends() }, [loadAllFriends])
+  // 旧「新規メッセージ」導線のために起動直後から800人＋タグを取得していたが、
+  // 現在その導線は表示されない。不要な最大800回超のD1読取を発生させない。
   useEffect(() => {
     try {
       localStorage.setItem(SHOW_RESOLVED_PREF_KEY, showResolved ? '1' : '0')
@@ -502,15 +497,18 @@ export default function ChatsPage() {
       if (res.success) {
         setChatDetail(res.data as unknown as ChatDetail)
         setNotes((res.data as unknown as ChatDetail).notes || '')
+        return true
       } else {
         // API は 200 で success:false を返す可能性 (例: 404 lookup)。詳細を画面に出す。
         const errMsg = (res as { error?: string }).error ?? '不明なエラー'
         if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
+        return false
       }
     } catch (err) {
       // ネットワーク / parse / auth fail などの例外。empty catch だと原因不明だったので詳細を出す。
       const msg = err instanceof Error ? err.message : String(err)
       if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
+      return false
     } finally {
       chatDetailRefreshInFlightRef.current = false
       if (!silent) setDetailLoading(false)
@@ -519,21 +517,6 @@ export default function ChatsPage() {
 
   useEffect(() => {
     loadChats()
-  }, [loadChats])
-
-  // LINE受信を画面再読み込みなしで反映する。非表示タブでは通信を止め、
-  // 前回取得が終わっていない場合は重ねて取得しない。
-  useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState !== 'visible') return
-      void loadChats(true)
-    }
-    const id = window.setInterval(refresh, 3000)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.clearInterval(id)
-      document.removeEventListener('visibilitychange', refresh)
-    }
   }, [loadChats])
 
   // Deep-link from other pages (e.g. /form-submissions): ?friend=<friendId>
@@ -555,19 +538,50 @@ export default function ChatsPage() {
     }
   }, [selectedChatId, loadChatDetail])
 
+  // LINE Webhook / 手動送信 / 対応状況の変更で revision が進んだ時だけ、
+  // 重い一覧と本文を再取得する。通常時はインデックスだけを見る軽量API 1本で済む。
+  // 常時接続ではなく revision を使うため、スリープや一時切断後も次回確認で必ず追いつく。
   useEffect(() => {
-    if (!selectedChatId) return
-    const refresh = () => {
-      if (document.visibilityState !== 'visible') return
-      void loadChatDetail(selectedChatId, true)
+    let cancelled = false
+    chatRevisionRef.current = null
+
+    const refreshWhenChanged = async () => {
+      if (document.visibilityState !== 'visible' || revisionRefreshInFlightRef.current) return
+      revisionRefreshInFlightRef.current = true
+      try {
+        const revisionRes = await api.chats.revision({
+          accountId: selectedAccountId || undefined,
+        })
+        if (cancelled || !revisionRes.success) return
+
+        const nextRevision = revisionRes.data.revision
+        // 初回も revision を取得してから本文を読み直す。先に行われる初期読込との間に
+        // Webhook が届いても、基準値だけを進めて新着を取りこぼす競合を防ぐ。
+        if (chatRevisionRef.current !== null && chatRevisionRef.current === nextRevision) return
+
+        const [listUpdated, detailUpdated] = await Promise.all([
+          loadChats(true),
+          selectedChatId ? loadChatDetail(selectedChatId, true) : Promise.resolve(true),
+        ])
+        if (!cancelled && listUpdated && detailUpdated) {
+          chatRevisionRef.current = nextRevision
+        }
+      } catch {
+        // 一時的な通信失敗では revision を進めない。次回確認で同じ変更を再取得する。
+      } finally {
+        revisionRefreshInFlightRef.current = false
+      }
     }
-    const id = window.setInterval(refresh, 3000)
-    document.addEventListener('visibilitychange', refresh)
+
+    void refreshWhenChanged()
+    const id = window.setInterval(refreshWhenChanged, 3000)
+    document.addEventListener('visibilitychange', refreshWhenChanged)
     return () => {
+      cancelled = true
       window.clearInterval(id)
-      document.removeEventListener('visibilitychange', refresh)
+      document.removeEventListener('visibilitychange', refreshWhenChanged)
     }
-  }, [selectedChatId, loadChatDetail])
+  }, [loadChatDetail, loadChats, selectedAccountId, selectedChatId])
 
   // Surface deep-linked chats in the sidebar even when the current account
   // filter or status filter would exclude them — otherwise the user replies
