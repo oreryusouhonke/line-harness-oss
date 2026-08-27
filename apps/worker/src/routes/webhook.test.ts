@@ -19,6 +19,7 @@ vi.mock('@line-crm/db', () => ({
   advanceFriendScenario: vi.fn(),
   completeFriendScenario: vi.fn(),
   upsertChatOnMessage: vi.fn(),
+  upsertChatOnDesignBotActivity: vi.fn(),
   getLineAccounts: vi.fn().mockResolvedValue([]),
   jstNow: vi.fn(),
   computeNextDeliveryAt: vi.fn(),
@@ -70,6 +71,7 @@ import {
   jstNow,
   resolveStepContent,
   updateFriendFollowStatus,
+  upsertChatOnDesignBotActivity,
   upsertChatOnMessage,
   upsertFriend,
 } from '@line-crm/db';
@@ -80,6 +82,18 @@ function setupApp() {
   const app = new Hono();
   app.route('/', webhook);
   return app;
+}
+
+async function signDesignPayload(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signed = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body));
+  return btoa(String.fromCharCode(...new Uint8Array(signed)));
 }
 
 const baseEnv = {
@@ -97,6 +111,62 @@ const baseExecutionCtx = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getLineAccounts).mockResolvedValue([]);
+});
+
+describe('POST /internal/design-bot/outgoing', () => {
+  test('stores generated messages and makes the design conversation visible', async () => {
+    const designSecret = 'design-channel-secret';
+    const account = {
+      id: 'account-design',
+      channel_id: '2004093583',
+      channel_secret: designSecret,
+      is_active: 1,
+    };
+    vi.mocked(getLineAccounts).mockResolvedValue([account] as never);
+    vi.mocked(upsertFriend).mockResolvedValue({ id: 'friend-design' } as never);
+    vi.mocked(upsertChatOnDesignBotActivity).mockResolvedValue({ id: 'chat-design' } as never);
+
+    const boundStatements: unknown[] = [];
+    const db = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn((...params: unknown[]) => {
+          const statement = { params };
+          boundStatements.push(statement);
+          return statement;
+        }),
+      })),
+      batch: vi.fn(async () => ({ success: true })),
+    } as unknown as D1Database;
+    const payload = JSON.stringify({
+      accountId: account.id,
+      lineUserId: 'U-design-user',
+      messages: [
+        { type: 'text', text: '完成しました' },
+        {
+          type: 'image',
+          originalContentUrl: 'https://example.com/design.png',
+          previewImageUrl: 'https://example.com/design-preview.png',
+        },
+      ],
+    });
+    const signature = await signDesignPayload(designSecret, payload);
+
+    const response = await setupApp().request(
+      '/internal/design-bot/outgoing',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-design-signature': signature },
+        body: payload,
+      },
+      { ...baseEnv, DB: db } as never,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, logged: 2 });
+    expect(boundStatements).toHaveLength(2);
+    expect(db.batch).toHaveBeenCalledOnce();
+    expect(upsertChatOnDesignBotActivity).toHaveBeenCalledWith(db, 'friend-design');
+  });
 });
 
 describe('POST /webhook — DoS defenses (#104)', () => {

@@ -4,7 +4,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createChat, upsertChatOnMessage, getChatByFriendId } from '../src/chats.js';
+import {
+  createChat,
+  getChatByFriendId,
+  upsertChatOnDesignBotActivity,
+  upsertChatOnMessage,
+} from '../src/chats.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = join(__dirname, '..');
@@ -325,6 +330,40 @@ describe('createChat / upsertChatOnMessage single-row guarantee', () => {
     // 受信メッセージの時刻で更新される (resolveOrCreateChat とのレースで
     // resolved 行を掴んだケースでも取りこぼさないための保証)
     expect(after.last_message_at).not.toBe('2024-01-01T00:00:00.000+09:00');
+  });
+
+  it('upsertChatOnDesignBotActivity creates a visible in-progress chat', async () => {
+    insertFriend(sqlite, 'f-design-new');
+
+    const chat = await upsertChatOnDesignBotActivity(db, 'f-design-new');
+
+    expect(chat.status).toBe('in_progress');
+    expect(chat.last_message_at).toBeTruthy();
+    const count = sqlite.prepare(`SELECT COUNT(*) AS c FROM chats WHERE friend_id = 'f-design-new'`).get() as { c: number };
+    expect(count.c).toBe(1);
+  });
+
+  it('upsertChatOnDesignBotActivity restores a resolved chat without losing operator data', async () => {
+    insertFriend(sqlite, 'f-design-existing');
+    sqlite.prepare(
+      `INSERT INTO operators (id, name, email) VALUES ('op-design', 'Op', 'design@example.com')`,
+    ).run();
+    insertChatRow(sqlite, {
+      id: 'c-design',
+      friendId: 'f-design-existing',
+      status: 'resolved',
+      operatorId: 'op-design',
+      notes: 'keep this memo',
+      lastMessageAt: '2024-01-01T00:00:00.000+09:00',
+      createdAt: '2024-01-01T00:00:00.000+09:00',
+    });
+
+    const chat = await upsertChatOnDesignBotActivity(db, 'f-design-existing');
+
+    expect(chat.status).toBe('in_progress');
+    expect(chat.operator_id).toBe('op-design');
+    expect(chat.notes).toBe('keep this memo');
+    expect(chat.last_message_at).not.toBe('2024-01-01T00:00:00.000+09:00');
   });
 
   it('getChatByFriendId picks the newest row when legacy duplicates remain', async () => {
