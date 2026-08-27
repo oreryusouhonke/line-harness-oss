@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { api } from '@/lib/api'
 
 export type ImageUploaderMode = 'url' | 'line-image'
@@ -19,6 +19,7 @@ export interface ImageUploaderProps {
   label?: string
   compact?: boolean
   variant?: 'default' | 'composer'
+  interactionTargetRef?: RefObject<HTMLElement | null>
 }
 
 /**
@@ -28,7 +29,15 @@ export interface ImageUploaderProps {
  * mode='line-image' は {originalContentUrl, previewImageUrl} を返す (Broadcast / Auto-reply / Template / Chats)。
  * 初版は preview = original の同 URL。後段で本格 resize が必要になれば worker 側で対応。
  */
-export default function ImageUploader({ mode, value, onChange, label, compact = false, variant = 'default' }: ImageUploaderProps) {
+export default function ImageUploader({
+  mode,
+  value,
+  onChange,
+  label,
+  compact = false,
+  variant = 'default',
+  interactionTargetRef,
+}: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -130,6 +139,44 @@ export default function ImageUploader({ mode, value, onChange, label, compact = 
     [upload],
   )
 
+  useEffect(() => {
+    const target = interactionTargetRef?.current
+    if (!target) return
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+    }
+
+    const handleDrop = (event: DragEvent) => {
+      const file = event.dataTransfer?.files[0]
+      if (!file) return
+      event.preventDefault()
+      void upload(file)
+    }
+
+    const handlePaste = (event: ClipboardEvent) => {
+      const item = [...(event.clipboardData?.items ?? [])].find((candidate) =>
+        candidate.type.startsWith('image/'),
+      )
+      const file = item?.getAsFile()
+      if (!file) return
+      event.preventDefault()
+      void upload(file)
+    }
+
+    target.addEventListener('dragover', handleDragOver)
+    target.addEventListener('drop', handleDrop)
+    target.addEventListener('paste', handlePaste)
+
+    return () => {
+      target.removeEventListener('dragover', handleDragOver)
+      target.removeEventListener('drop', handleDrop)
+      target.removeEventListener('paste', handlePaste)
+    }
+  }, [interactionTargetRef, upload])
+
   const previewUrl =
     value === null
       ? null
@@ -140,9 +187,9 @@ export default function ImageUploader({ mode, value, onChange, label, compact = 
   if (variant === 'composer') {
     return (
       <div
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={onDrop}
-        onPaste={onPaste}
+        onDragOver={interactionTargetRef ? undefined : (e) => e.preventDefault()}
+        onDrop={interactionTargetRef ? undefined : onDrop}
+        onPaste={interactionTargetRef ? undefined : onPaste}
         tabIndex={0}
         className="flex shrink-0 items-center gap-2 rounded-md focus:outline-none focus:ring-2 focus:ring-emerald-500"
       >
@@ -164,7 +211,7 @@ export default function ImageUploader({ mode, value, onChange, label, compact = 
             onClick={() => inputRef.current?.click()}
             disabled={busy}
             aria-label="画像を追加"
-            title="画像を追加。ドラッグ&ドロップや貼り付けもできます"
+            title="画像を追加。入力欄へのドラッグ&ドロップや Ctrl+V でも追加できます"
             className="h-10 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             {busy ? '処理中' : '画像'}
