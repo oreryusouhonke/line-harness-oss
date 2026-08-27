@@ -404,6 +404,7 @@ export default function ChatsPage() {
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerInteractionRef = useRef<HTMLDivElement>(null)
 
   const buildListParams = useCallback((cursor: { at: string; id: string } | null) => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
@@ -1343,12 +1344,17 @@ export default function ChatsPage() {
                     </button>
                   </div>
                 )}
-                <div className="flex items-end gap-2 rounded-xl border border-gray-300 bg-white p-2 focus-within:ring-2 focus-within:ring-green-500">
+                <div
+                  ref={composerInteractionRef}
+                  className="flex items-end gap-2 rounded-xl border border-gray-300 bg-white p-2 focus-within:ring-2 focus-within:ring-green-500"
+                  title="画像はこの入力欄へドラッグ＆ドロップ、または Ctrl+V で貼り付けできます"
+                >
                   <ImageUploader
                     mode="line-image"
                     value={pendingImage}
                     onChange={setPendingImage}
                     variant="composer"
+                    interactionTargetRef={composerInteractionRef}
                   />
                   <textarea
                     ref={textareaRef}
