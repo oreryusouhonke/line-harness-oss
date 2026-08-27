@@ -64,7 +64,7 @@ interface ChatDetail extends Chat {
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
-type QueueFilter = 'all' | 'needs_action'
+type QueueFilter = 'all' | 'in_progress' | 'needs_action'
 
 const CHAT_QUEUE_FILTER_PREF_KEY = 'lh_chat_queue_filter'
 const CHAT_PAGE_SIZE = 100
@@ -393,7 +393,9 @@ export default function ChatsPage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(CHAT_QUEUE_FILTER_PREF_KEY)
-      if (saved === 'all' || saved === 'needs_action') setQueueFilter(saved)
+      if (saved === 'all' || saved === 'in_progress' || saved === 'needs_action') {
+        setQueueFilter(saved)
+      }
     } catch {
       // localStorage unavailable
     }
@@ -1053,9 +1055,12 @@ export default function ChatsPage() {
     : chats
   const visibleChats = queueFilter === 'needs_action'
     ? searchedChats.filter((chat) => chat.status === 'unread')
-    : searchedChats
+    : queueFilter === 'in_progress'
+      ? searchedChats.filter((chat) => chat.status !== 'resolved')
+      : searchedChats
   const queueCounts = {
     all: searchedChats.length,
+    in_progress: searchedChats.filter((chat) => chat.status !== 'resolved').length,
     needs_action: searchedChats.filter((chat) => chat.status === 'unread').length,
   }
 
@@ -1112,6 +1117,7 @@ export default function ChatsPage() {
           <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5">
             {([
               { key: 'all', label: '全て' },
+              { key: 'in_progress', label: '対応中' },
               { key: 'needs_action', label: '🔴 要対応' },
             ] as { key: QueueFilter; label: string }[]).map((f) => (
               <button
