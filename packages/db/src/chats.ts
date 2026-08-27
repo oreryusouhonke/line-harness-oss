@@ -142,3 +142,11 @@ export async function upsertChatOnMessage(db: D1Database, friendId: string): Pro
   await updateChat(db, chat.id, { status: newStatus, lastMessageAt: now });
   return (await getChatById(db, chat.id))!;
 }
+
+/** デザインBotが処理中の会話をチャット一覧へ表示するために作成/更新する。 */
+export async function upsertChatOnDesignBotActivity(db: D1Database, friendId: string): Promise<ChatRow> {
+  const now = jstNow();
+  const chat = (await getChatByFriendId(db, friendId)) ?? (await createChat(db, { friendId }));
+  await updateChat(db, chat.id, { status: 'in_progress', lastMessageAt: now });
+  return (await getChatById(db, chat.id))!;
+}

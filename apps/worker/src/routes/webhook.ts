@@ -9,6 +9,7 @@ import {
   getScenarios,
   enrollFriendInScenario,
   upsertChatOnMessage,
+  upsertChatOnDesignBotActivity,
   getLineAccounts,
   jstNow,
   getEntryRouteByRefCode,
@@ -399,6 +400,8 @@ webhook.post('/internal/design-bot/outgoing', async (c) => {
       now,
     );
   }));
+
+  await upsertChatOnDesignBotActivity(c.env.DB, friend.id);
 
   return c.json({ ok: true, logged: messages.length });
 });
@@ -1407,6 +1410,10 @@ export async function routeToSharedDesignBot(
     gateway_secret: string;
   }>();
   if (!row || !isSharedDesignAccountChannel(row.gateway_channel_id)) return false;
+
+  // デザインBotへ渡した会話は自動処理中としてHarnessにも表示する。
+  // 通常の upsertChatOnMessage は「要対応」にするため、Bot処理専用の状態更新を使う。
+  await upsertChatOnDesignBotActivity(db, input.friendId);
 
   const payload = JSON.stringify({
     accountId: input.lineAccountId,
