@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 
 const lineClientMocks = vi.hoisted(() => ({
   getProfile: vi.fn(),
+  getGroupSummary: vi.fn(),
   replyMessage: vi.fn(),
   pushMessage: vi.fn(),
 }));
@@ -184,6 +185,58 @@ describe('POST /webhook — DoS defenses (#104)', () => {
 });
 
 describe('POST /webhook — first-contact existing friends', () => {
+  test('registers a group conversation and keeps it human-only', async () => {
+    vi.mocked(verifySignature).mockResolvedValue(true);
+    vi.mocked(getFriendByLineUserId).mockResolvedValue(null);
+    vi.mocked(jstNow).mockReturnValue('2026-08-28T10:00:00.000+09:00');
+    lineClientMocks.getGroupSummary.mockResolvedValue({
+      groupId: 'C-group-1',
+      groupName: '取引先グループ',
+      pictureUrl: 'https://example.com/group.jpg',
+    });
+    vi.mocked(upsertFriend).mockResolvedValue({
+      id: 'group-friend-1', line_user_id: 'C-group-1', display_name: '取引先グループ',
+      management_nickname: null, picture_url: 'https://example.com/group.jpg', status_message: null,
+      is_following: 1, user_id: null, line_account_id: null, metadata: '{}', first_tracked_link_id: null,
+      created_at: '2026-08-28T10:00:00.000+09:00', updated_at: '2026-08-28T10:00:00.000+09:00',
+    });
+    vi.mocked(upsertChatOnMessage).mockResolvedValue({
+      id: 'group-chat-1', friend_id: 'group-friend-1', operator_id: null, status: 'unread', notes: null,
+      last_message_at: '2026-08-28T10:00:00.000+09:00', created_at: '2026-08-28T10:00:00.000+09:00',
+      updated_at: '2026-08-28T10:00:00.000+09:00',
+    });
+
+    const stmt = {
+      bind: vi.fn(), run: vi.fn().mockResolvedValue({}), all: vi.fn().mockResolvedValue({ results: [] }),
+      first: vi.fn().mockResolvedValue(null),
+    };
+    stmt.bind.mockReturnValue(stmt);
+    const db = { prepare: vi.fn().mockReturnValue(stmt) } as unknown as D1Database;
+    const executionCtx = {
+      waitUntil: vi.fn(), passThroughOnException: vi.fn(), props: {},
+    } as unknown as ExecutionContext;
+
+    const res = await setupApp().request('/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Line-Signature': 'A'.repeat(43) + '=' },
+      body: JSON.stringify({ destination: 'bot', events: [{
+        type: 'message', replyToken: 'reply-token', message: { type: 'text', id: 'message-group-1', text: '確認お願いします' },
+        timestamp: Date.now(), source: { type: 'group', groupId: 'C-group-1', userId: 'U-member-1' },
+        webhookEventId: 'event-group-1', deliveryContext: { isRedelivery: false }, mode: 'active',
+      }] }),
+    }, { ...baseEnv, DB: db }, executionCtx);
+
+    expect(res.status).toBe(200);
+    await (vi.mocked(executionCtx.waitUntil).mock.calls[0]?.[0] as Promise<unknown>);
+    expect(lineClientMocks.getGroupSummary).toHaveBeenCalledWith('C-group-1');
+    expect(upsertFriend).toHaveBeenCalledWith(db, expect.objectContaining({
+      lineUserId: 'C-group-1', displayName: '取引先グループ',
+    }));
+    expect(upsertChatOnMessage).toHaveBeenCalledWith(db, 'group-friend-1');
+    expect(fireEvent).not.toHaveBeenCalled();
+    expect(lineClientMocks.replyMessage).not.toHaveBeenCalled();
+  });
+
   test('auto-registers an unknown text-message sender without firing friend_add handling', async () => {
     vi.mocked(verifySignature).mockResolvedValue(true);
     vi.mocked(getFriendByLineUserId).mockResolvedValue(null);
