@@ -50,6 +50,8 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - name: Build test-time workspace dependency
+        run: pnpm --filter @line-harness/update-engine build
       - name: Check migration safety and numbering
         run: pnpm tsx scripts/check-migrations.ts
       - name: Run all unit tests
