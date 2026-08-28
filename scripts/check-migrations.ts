@@ -141,6 +141,8 @@ export const GRANDFATHERED_DUPLICATE_PREFIXES: Readonly<Record<string, readonly 
   '037': ['037_event_booking.sql', '037_scenario_delivery_mode.sql'],
   '038': ['038_entry_routes_pool_and_push.sql', '038_scenario_templates_and_stats.sql'],
   '041': ['041_account_og_defaults.sql', '041_event_custom_messages.sql', '041_update_history.sql'],
+  '046': ['046_affiliate_links.sql', '046_link_tracking_controls.sql'],
+  '051': ['051_booking_recurring_availability_google_calendar.sql', '051_webinars.sql'],
 };
 
 export function findDuplicateMigrationPrefixViolations(names: string[]): string[] {
