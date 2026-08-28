@@ -38,6 +38,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Upgrade-matrix tests read historical schemas from release tags.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
