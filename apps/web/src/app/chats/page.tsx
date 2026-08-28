@@ -11,6 +11,8 @@ import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
 import { isIemotoBotActive, isImportedLineHistory } from './chat-mode'
 
+const CHAT_REFRESH_REQUEST_TIMEOUT_MS = 10_000
+
 interface Chat {
   id: string
   friendId: string
@@ -415,8 +417,10 @@ export default function ChatsPage() {
       setLoading(true)
       setError('')
     }
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), CHAT_REFRESH_REQUEST_TIMEOUT_MS)
     try {
-      const chatRes = await api.chats.list(buildListParams(null))
+      const chatRes = await api.chats.list(buildListParams(null), { signal: controller.signal, cache: 'no-store' })
       if (chatRes.success) {
         const rows = chatRes.data as unknown as Chat[]
         setChats(rows)
@@ -428,6 +432,7 @@ export default function ChatsPage() {
     } catch {
       if (!silent) setError('チャットの読み込みに失敗しました。もう一度お試しください。')
     } finally {
+      window.clearTimeout(timeoutId)
       chatListRefreshInFlightRef.current = false
       if (!silent) setLoading(false)
     }
@@ -496,8 +501,10 @@ export default function ChatsPage() {
       setDetailLoading(true)
       setError('')
     }
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), CHAT_REFRESH_REQUEST_TIMEOUT_MS)
     try {
-      const res = await api.chats.get(chatId)
+      const res = await api.chats.get(chatId, { signal: controller.signal, cache: 'no-store' })
       if (res.success) {
         setChatDetail(res.data as unknown as ChatDetail)
         setNotes((res.data as unknown as ChatDetail).notes || '')
@@ -511,6 +518,7 @@ export default function ChatsPage() {
       const msg = err instanceof Error ? err.message : String(err)
       if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
     } finally {
+      window.clearTimeout(timeoutId)
       chatDetailRefreshInFlightRef.current = false
       if (!silent) setDetailLoading(false)
     }
@@ -529,9 +537,15 @@ export default function ChatsPage() {
     }
     const id = window.setInterval(refresh, 3000)
     document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    window.addEventListener('online', refresh)
+    window.addEventListener('pageshow', refresh)
     return () => {
       window.clearInterval(id)
       document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('pageshow', refresh)
     }
   }, [loadChats])
 
@@ -562,9 +576,15 @@ export default function ChatsPage() {
     }
     const id = window.setInterval(refresh, 3000)
     document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    window.addEventListener('online', refresh)
+    window.addEventListener('pageshow', refresh)
     return () => {
       window.clearInterval(id)
       document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('pageshow', refresh)
     }
   }, [selectedChatId, loadChatDetail])
 
