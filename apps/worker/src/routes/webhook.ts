@@ -208,6 +208,108 @@ async function ensureFriendFromWebhookUser(
   return friend;
 }
 
+type ConversationSource = {
+  targetId: string;
+  chatType: 'user' | 'group' | 'room';
+};
+
+function resolveConversationSource(event: WebhookEvent): ConversationSource | null {
+  if (event.source.type === 'user') return { targetId: event.source.userId, chatType: 'user' };
+  if (event.source.type === 'group') return { targetId: event.source.groupId, chatType: 'group' };
+  if (event.source.type === 'room') return { targetId: event.source.roomId, chatType: 'room' };
+  return null;
+}
+
+function normalizeGroupName(value: string): string {
+  return value.normalize('NFKC').replace(/[\s➕＋+]/g, '').toLowerCase();
+}
+
+async function ensureFriendFromWebhookConversation(
+  db: D1Database,
+  lineClient: LineClient,
+  source: ConversationSource,
+  lineAccountId: string | null,
+): Promise<Friend | null> {
+  if (source.chatType === 'user') {
+    return ensureFriendFromWebhookUser(db, lineClient, source.targetId, lineAccountId);
+  }
+
+  let displayName = source.chatType === 'group' ? 'LINEグループ' : '複数人トーク';
+  let pictureUrl: string | null = null;
+  if (source.chatType === 'group') {
+    try {
+      const summary = await lineClient.getGroupSummary(source.targetId);
+      displayName = summary.groupName || displayName;
+      pictureUrl = summary.pictureUrl ?? null;
+    } catch (err) {
+      console.error('[webhook] Failed to get group summary', source.targetId, err);
+    }
+  }
+
+  let friend = await getFriendByLineUserId(db, source.targetId, lineAccountId);
+  if (!friend && source.chatType === 'group' && lineAccountId) {
+    const legacyRows = await db.prepare(
+      `SELECT id, display_name, management_nickname, metadata
+         FROM friends
+        WHERE line_account_id = ?
+          AND line_platform_user_id IS NULL
+          AND json_extract(metadata, '$.line_chat_type') = 'group'`,
+    ).bind(lineAccountId).all<{ id: string; display_name: string | null; management_nickname: string | null; metadata: string }>();
+    const normalizedName = normalizeGroupName(displayName);
+    const matches = legacyRows.results.filter((row) => {
+      let originalName = '';
+      try { originalName = String(JSON.parse(row.metadata).original_display_name ?? ''); } catch { /* ignore */ }
+      return [row.display_name, row.management_nickname, originalName]
+        .some((name) => name && normalizeGroupName(name).includes(normalizedName));
+    });
+    if (matches.length === 1) {
+      await db.prepare(
+        `UPDATE friends
+            SET line_user_id = ?, line_platform_user_id = ?, display_name = ?, picture_url = ?,
+                is_following = 1, status_message = NULL, updated_at = ?
+          WHERE id = ?`,
+      ).bind(`${lineAccountId}:${source.targetId}`, source.targetId, displayName, pictureUrl, jstNow(), matches[0].id).run();
+      friend = await getFriendByLineUserId(db, source.targetId, lineAccountId);
+    }
+  }
+
+  if (!friend) {
+    friend = await upsertFriend(db, {
+      lineUserId: source.targetId,
+      lineAccountId,
+      displayName,
+      pictureUrl,
+      statusMessage: null,
+    });
+  }
+
+  const metadata = (() => {
+    try { return JSON.parse(friend!.metadata || '{}') as Record<string, unknown>; } catch { return {}; }
+  })();
+  metadata.line_chat_type = source.chatType;
+  metadata.line_conversation_id = source.targetId;
+  await db.prepare(
+    `UPDATE friends
+        SET metadata = ?, display_name = ?, picture_url = COALESCE(?, picture_url),
+            is_following = 0, updated_at = ?
+      WHERE id = ?`,
+  ).bind(JSON.stringify(metadata), displayName, pictureUrl, jstNow(), friend.id).run();
+
+  return { ...friend, line_user_id: source.targetId, display_name: displayName, picture_url: pictureUrl ?? friend.picture_url, metadata: JSON.stringify(metadata) };
+}
+
+async function markGroupConversationForHumanHandling(db: D1Database, friendId: string): Promise<void> {
+  const chat = await upsertChatOnMessage(db, friendId);
+  const now = jstNow();
+  await db.prepare(
+    `UPDATE chats
+        SET handling_mode = 'human', bot_state = 'IDLE', attention_status = 'NEEDS_REPLY',
+            status = 'unread', last_customer_message_at = ?, next_action_at = ?,
+            version = version + 1, updated_at = ?
+      WHERE id = ?`,
+  ).bind(now, new Date(Date.now() + 10 * 60_000).toISOString(), now, chat.id).run();
+}
+
 async function findTagIdByName(db: D1Database, name: string): Promise<string | null> {
   const row = await db.prepare('SELECT id FROM tags WHERE name = ? LIMIT 1').bind(name).first<{ id: string }>();
   return row?.id ?? null;
@@ -653,9 +755,9 @@ async function handleEvent(
   // ここで早期 return することで、テキスト用の auto_reply / scenario 判定には進まない
   // （スタンプ単体に対するキーワードマッチは意味を持たないため）。inbox 抜けだけ防ぐ。
   if (event.type === 'message' && event.message.type !== 'text') {
-    const userId = event.source.type === 'user' ? event.source.userId : undefined;
-    if (!userId) return;
-    const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
+    const source = resolveConversationSource(event);
+    if (!source) return;
+    const friend = await ensureFriendFromWebhookConversation(db, lineClient, source, lineAccountId);
     if (!friend) return;
 
     const msg = event.message as {
@@ -707,11 +809,21 @@ async function handleEvent(
     const logId = crypto.randomUUID();
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
-         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?)`,
+        `INSERT INTO messages_log
+         (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source,
+          line_account_id, line_message_id, webhook_event_id, line_timestamp, context_group_id, created_at)
+         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?, ?, ?, ?, ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, msg.type, finalContent, lineAccountId, jstNow())
+      .bind(
+        crypto.randomUUID(), friend.id, msg.type, finalContent, lineAccountId,
+        msg.id, event.webhookEventId || null, event.timestamp,
+        source.chatType === 'user' ? null : source.targetId, jstNow(),
+      )
       .run();
+    if (source.chatType !== 'user') {
+      await markGroupConversationForHumanHandling(db, friend.id);
+      return;
+    }
     if (await markHumanConversationNeedsReply(db, friend.id)) return;
     if (msg.type === 'image' && await routeToSharedDesignBot(db, {
       friendId: friend.id,
@@ -745,14 +857,14 @@ async function handleEvent(
 
   if (event.type === 'message' && event.message.type === 'text') {
     const textMessage = event.message as TextEventMessage;
-    const userId =
-      event.source.type === 'user' ? event.source.userId : undefined;
-    if (!userId) return;
-
-    const friend = await ensureFriendFromWebhookUser(db, lineClient, userId, lineAccountId);
+    const source = resolveConversationSource(event);
+    if (!source) return;
+    const friend = await ensureFriendFromWebhookConversation(db, lineClient, source, lineAccountId);
     if (!friend) return;
 
-    const inflowTagName = INFLOW_SOURCE_TAG_BY_MESSAGE[textMessage.text.trim()];
+    const inflowTagName = source.chatType === 'user'
+      ? INFLOW_SOURCE_TAG_BY_MESSAGE[textMessage.text.trim()]
+      : undefined;
     if (inflowTagName) {
       const inflowTagId = await findTagIdByName(db, inflowTagName);
       if (inflowTagId) {
@@ -787,6 +899,13 @@ async function handleEvent(
         now,
       )
       .run();
+
+    // Group/room conversations are deliberately human-only. This prevents
+    // auto replies, scenarios and AI bots from firing into a shared chat.
+    if (source.chatType !== 'user') {
+      await markGroupConversationForHumanHandling(db, friend.id);
+      return;
+    }
 
     // Stop every automated text branch before forwarding or replying.
     if (await markHumanConversationNeedsReply(db, friend.id)) return;
@@ -943,7 +1062,7 @@ async function handleEvent(
 
     if (iemotoConsultationActive && isIemotoDesignGenerationRequest(incomingText)) {
       try {
-        await lineClient.pushTextMessage(userId, 'よし、作る。少し待ってくれ。');
+        await lineClient.pushTextMessage(source.targetId, 'よし、作る。少し待ってくれ。');
         await db.prepare(
           `INSERT INTO messages_log (id, friend_id, direction, message_type, content, source, line_account_id, created_at)
            VALUES (?, ?, 'outgoing', 'text', ?, 'iemoto_bot', ?, ?)`,
@@ -955,7 +1074,7 @@ async function handleEvent(
 
     const iemotoResult = humanHandling ? null : await routeToIemotoBotDetailed(routingEnv, {
       lineAccountId,
-      lineUserId: userId,
+      lineUserId: source.targetId,
       text: incomingText,
       friend,
       authoritativeControlMode: 'bot',

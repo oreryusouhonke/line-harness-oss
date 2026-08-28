@@ -7,6 +7,7 @@ import type {
   ReplyMessageRequest,
   RichMenuObject,
   UserProfile,
+  GroupSummary,
 } from './types.js';
 
 const LINE_API_BASE = 'https://api.line.me';
@@ -173,6 +174,14 @@ export class LineClient {
       `/v2/bot/user/all/richmenu/${encodeURIComponent(richMenuId)}`,
     );
     return data;
+  }
+
+  async getGroupSummary(groupId: string): Promise<GroupSummary> {
+    const { data } = await this.request(
+      'GET',
+      `/v2/bot/group/${encodeURIComponent(groupId)}/summary`,
+    );
+    return data as GroupSummary;
   }
 
   async clearDefaultRichMenu(): Promise<unknown> {

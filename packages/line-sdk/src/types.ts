@@ -160,6 +160,12 @@ export interface TextMessage {
   quoteToken?: string;
 }
 
+export interface GroupSummary {
+  groupId: string;
+  groupName: string;
+  pictureUrl?: string;
+}
+
 export interface ImageMessage {
   type: 'image';
   originalContentUrl: string;
