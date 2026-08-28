@@ -69,7 +69,7 @@ export function buildBundle(args: BuildBundleArgs): void {
     mkdirSync(dirname(absOut), { recursive: true });
 
     // Build the tarball. -C makes paths inside the tar relative to staging.
-    execFileSync('tar', ['czf', absOut, '-C', staging, 'worker', 'admin', 'liff', 'migrations'], {
+    execFileSync('tar', ['czf', absOut, '-C', staging, 'worker', 'worker-assets', 'admin', 'liff', 'migrations'], {
       stdio: 'inherit',
     });
 
