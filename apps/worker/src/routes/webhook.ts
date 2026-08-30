@@ -23,6 +23,7 @@ import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import { buildCouponSaleFlex } from '../services/coupon-sale-automation.js';
 import { handoffConversation } from '../services/conversation-control-store.js';
 import { dispatchConversationOutbound } from '../services/conversation-outbound.js';
+import { attachCustomerReactionForLearning } from '../services/conversation-learning.js';
 import { completeWebhookEvent, failWebhookEvent, reserveWebhookEvent } from '../services/line-webhook-dedup.js';
 import { redactSensitiveText } from '../services/sensitive-data.js';
 import { recordAiFailure, recordAiSuccess } from '../services/ai-service-health.js';
@@ -815,11 +816,20 @@ async function handleEvent(
          VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
-        crypto.randomUUID(), friend.id, msg.type, finalContent, lineAccountId,
+        logId, friend.id, msg.type, finalContent, lineAccountId,
         msg.id, event.webhookEventId || null, event.timestamp,
         source.chatType === 'user' ? null : source.targetId, jstNow(),
       )
       .run();
+    try {
+      await attachCustomerReactionForLearning(db, {
+        friendId: friend.id,
+        reactionMessageId: logId,
+        reactedAt: jstNow(),
+      });
+    } catch (error) {
+      console.error('conversation learning reaction capture failed:', error);
+    }
     if (source.chatType !== 'user') {
       await markGroupConversationForHumanHandling(db, friend.id);
       return;
@@ -899,6 +909,16 @@ async function handleEvent(
         now,
       )
       .run();
+
+    try {
+      await attachCustomerReactionForLearning(db, {
+        friendId: friend.id,
+        reactionMessageId: logId,
+        reactedAt: now,
+      });
+    } catch (error) {
+      console.error('conversation learning reaction capture failed:', error);
+    }
 
     // Group/room conversations are deliberately human-only. This prevents
     // auto replies, scenarios and AI bots from firing into a shared chat.
