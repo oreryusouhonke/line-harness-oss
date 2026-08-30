@@ -25,6 +25,7 @@ import {
   returnConversationToBot,
 } from '../services/conversation-control-store.js';
 import { dispatchConversationOutbound } from '../services/conversation-outbound.js';
+import { getConversationLearningSummary } from '../services/conversation-learning.js';
 
 const chats = new Hono<Env>();
 
@@ -514,6 +515,7 @@ chats.get('/api/chats/:id', async (c) => {
       .bind(...messageFriendIds)
       .all();
     messages.results = (messages.results as Record<string, unknown>[]).reverse();
+    const learningSummary = await getConversationLearningSummary(c.env.DB, chatRow?.id ?? null);
 
     return c.json({
       success: true,
@@ -537,6 +539,7 @@ chats.get('/api/chats/:id', async (c) => {
         notes,
         lastMessageAt,
         createdAt,
+        learningSummary,
         messages: (messages.results as Record<string, unknown>[]).map((m) => ({
           id: m.id,
           direction: m.direction,

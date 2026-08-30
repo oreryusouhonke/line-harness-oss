@@ -2,6 +2,7 @@ import { getFriendById, getLineAccountById, jstNow } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 import { extractFlexAltText } from '../utils/flex-alt-text.js';
 import { canSendQueuedMessage, type ConversationControl } from './conversation-control.js';
+import { captureHumanReplyForLearning } from './conversation-learning.js';
 
 type OutboundRow = {
   id: string;
@@ -139,6 +140,7 @@ export async function dispatchConversationOutbound(
     const source = outbound.sender_type === 'BOT'
       ? 'iemoto_bot'
       : outbound.sender_type === 'HUMAN' ? 'manual' : 'system_handoff';
+    const messageLogId = crypto.randomUUID();
     await db.batch([
       db.prepare(
         `UPDATE conversation_outbound_messages
@@ -148,7 +150,7 @@ export async function dispatchConversationOutbound(
       db.prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, source, quote_token, created_at)
          VALUES (?, ?, 'outgoing', ?, ?, ?, ?, ?)`,
-      ).bind(crypto.randomUUID(), friend.id, outbound.message_type, outbound.content, source, outbound.quote_token, now),
+      ).bind(messageLogId, friend.id, outbound.message_type, outbound.content, source, outbound.quote_token, now),
       db.prepare(
         `UPDATE chats SET last_reply_at = ?, last_message_at = ?, updated_at = ? WHERE id = ?`,
       ).bind(now, now, now, conversation.id),
@@ -158,6 +160,21 @@ export async function dispatchConversationOutbound(
          VALUES (?, ?, 'MESSAGE_SENT', ?, NULL, ?, ?, ?)`,
       ).bind(crypto.randomUUID(), conversation.id, outbound.sender_type, outbound.id, '{}', now),
     ]);
+    if (outbound.sender_type === 'HUMAN' && outbound.message_type === 'text') {
+      try {
+        await captureHumanReplyForLearning(db, {
+          conversationId: conversation.id,
+          friendId: friend.id,
+          lineAccountId: friend.line_account_id ?? null,
+          staffMessageId: messageLogId,
+          staffId: outbound.created_by,
+          createdAt: now,
+        });
+      } catch (error) {
+        // Learning capture must never turn a successfully delivered LINE message into a send failure.
+        console.error('conversation learning capture failed:', error);
+      }
+    }
     return { status: 'SENT' };
   } catch (error) {
     // Never auto-retry an ambiguous LINE timeout: it may have been accepted remotely.

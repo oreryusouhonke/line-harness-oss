@@ -280,6 +280,25 @@ CREATE TABLE conversation_audit_logs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE conversation_learning_examples (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  line_account_id TEXT,
+  customer_message_id TEXT NOT NULL REFERENCES messages_log(id) ON DELETE CASCADE,
+  staff_message_id TEXT NOT NULL REFERENCES messages_log(id) ON DELETE CASCADE,
+  customer_reaction_message_id TEXT REFERENCES messages_log(id) ON DELETE SET NULL,
+  staff_id TEXT,
+  status TEXT NOT NULL DEFAULT 'captured' CHECK (status IN ('captured','approved','rejected','excluded')),
+  exclusion_reason TEXT,
+  customer_reacted_at TEXT,
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  review_note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(staff_message_id)
+);
+
 CREATE TABLE conversation_operation_keys (
   idempotency_key TEXT PRIMARY KEY,
   conversation_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
@@ -1548,6 +1567,12 @@ CREATE INDEX idx_iemoto_memories_friend_category ON iemoto_memories(friend_id, c
 CREATE INDEX idx_iemoto_voice_messages_classification ON iemoto_voice_messages(classification, use_for_style);
 
 CREATE INDEX idx_iemoto_voice_messages_conversation ON iemoto_voice_messages(conversation_id, sort_order);
+
+CREATE INDEX idx_learning_examples_account_status ON conversation_learning_examples(line_account_id, status, created_at DESC);
+
+CREATE INDEX idx_learning_examples_conversation ON conversation_learning_examples(conversation_id, created_at DESC);
+
+CREATE INDEX idx_learning_examples_waiting_reaction ON conversation_learning_examples(conversation_id, customer_reaction_message_id, created_at DESC);
 
 CREATE INDEX idx_line_accounts_display_order
   ON line_accounts (display_order, created_at);

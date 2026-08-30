@@ -58,6 +58,13 @@ interface ChatDetail extends Chat {
   botGeneration: number
   botState: string
   attentionStatus: string
+  learningSummary?: {
+    captured: number
+    withCustomerReaction: number
+    approved: number
+    rejected: number
+    excluded: number
+  }
 }
 
 type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
@@ -1131,6 +1138,17 @@ export default function ChatsPage() {
                       家元Bot対応中
                     </span>
                   ) : null}
+                  {chatDetail.learningSummary && chatDetail.learningSummary.captured > 0 && (
+                    <span
+                      className="rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-800"
+                      title="実際のスタッフ返信を将来のAI返信案に使うため保存しています。自動送信は行いません。"
+                    >
+                      学習候補 {chatDetail.learningSummary.captured}件
+                      {chatDetail.learningSummary.withCustomerReaction > 0
+                        ? `・反応あり ${chatDetail.learningSummary.withCustomerReaction}件`
+                        : ''}
+                    </span>
+                  )}
                   {chatDetail.handlingMode === 'human' ? (
                     <button disabled={switchingHandlingMode} onClick={() => handleHandlingMode('bot')}
                       className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-md disabled:opacity-50">
