@@ -245,7 +245,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
 
   function renderContent(msg: MessageLog) {
     if (msg.messageType === 'text') return msg.content
-    if (msg.messageType === 'flex') {
+    if (msg.messageType === 'flex' || msg.messageType === 'template') {
       try {
         const parsed = JSON.parse(msg.content)
         // Extract ALL text from flex (up to 200 chars)
@@ -264,8 +264,14 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
           }
         }
         collectText(parsed)
+        if (parsed.type === 'template' && Array.isArray(parsed.template?.columns)) {
+          return parsed.template.columns
+            .map((column: { title?: string }) => column.title)
+            .filter(Boolean)
+            .join('\n') || '[テンプレートメッセージ]'
+        }
         return texts.slice(0, 4).join('\n') || '[Flex Message]'
-      } catch { return '[Flex Message]' }
+      } catch { return msg.messageType === 'template' ? '[テンプレートメッセージ]' : '[Flex Message]' }
     }
     if (msg.messageType === 'sticker') {
       return <StickerMessageImage content={msg.content} />
@@ -986,6 +992,7 @@ export default function ChatsPage() {
                   const preview = (() => {
                     if (chat.lastMessageType === 'image') return '📷 画像'
                     if (chat.lastMessageType === 'flex') return '📋 Flexメッセージ'
+                    if (chat.lastMessageType === 'template') return '📋 テンプレートメッセージ'
                     if (chat.lastMessageType === 'sticker') return '🎨 スタンプ'
                     if (chat.lastMessageType === 'video') return '🎥 動画'
                     if (chat.lastMessageType === 'audio') return '🎤 音声'
@@ -1205,7 +1212,7 @@ export default function ChatsPage() {
 
                     // メッセージ表示の分岐
                     let bubbleContent: React.ReactNode
-                    if (msg.messageType === 'flex') {
+                    if (msg.messageType === 'flex' || msg.messageType === 'template') {
                       bubbleContent = (
                         <div className="max-w-[300px]">
                           <FlexPreviewComponent content={msg.content} maxWidth={280} />

@@ -69,7 +69,7 @@ async function signForSecret(secret: string, body: string): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(signed)));
 }
 
-function mirroredMessageContent(message: MirroredDesignMessage): { messageType: string; content: string } {
+export function mirroredMessageContent(message: MirroredDesignMessage): { messageType: string; content: string } {
   if (message.type === 'text') return { messageType: 'text', content: String(message.text ?? '') };
   if (message.type === 'image') {
     return {
@@ -80,12 +80,17 @@ function mirroredMessageContent(message: MirroredDesignMessage): { messageType: 
       }),
     };
   }
+  if (message.type === 'flex') {
+    return {
+      messageType: 'flex',
+      content: JSON.stringify(message.contents ?? null),
+    };
+  }
   return {
-    messageType: 'flex',
+    messageType: 'template',
     content: JSON.stringify({
-      type: message.type,
+      type: 'template',
       altText: message.altText ?? null,
-      contents: message.contents ?? null,
       template: message.template ?? null,
     }),
   };

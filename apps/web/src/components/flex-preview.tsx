@@ -1,5 +1,7 @@
 'use client'
 
+import React from 'react'
+
 /**
  * Flex Message visual preview — renders LINE Flex JSON as a styled card.
  * Supports bubble (single) and carousel (multiple bubbles).
@@ -230,6 +232,51 @@ function FlexBubble({ bubble, maxWidth }: { bubble: FlexNode; maxWidth?: number 
   )
 }
 
+interface TemplateColumn {
+  title?: string
+  text?: string
+  thumbnailImageUrl?: string
+  actions?: Array<{ label?: string }>
+}
+
+function TemplateCarousel({ columns, maxWidth }: { columns: TemplateColumn[]; maxWidth?: number }) {
+  return (
+    <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', padding: '4px 0' }}>
+      {columns.map((column, i) => (
+        <div key={i} style={{
+          width: maxWidth || 280,
+          flex: '0 0 auto',
+          overflow: 'hidden',
+          borderRadius: '12px',
+          backgroundColor: '#fff',
+          color: '#111',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        }}>
+          {column.thumbnailImageUrl && (
+            <img src={column.thumbnailImageUrl} alt="" style={{ width: '100%', display: 'block' }} />
+          )}
+          <div style={{ padding: '14px 16px' }}>
+            {column.title && <p style={{ margin: '0 0 6px', fontWeight: 700 }}>{column.title}</p>}
+            {column.text && <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.5 }}>{column.text}</p>}
+          </div>
+          {(column.actions || []).map((action, actionIndex) => (
+            <div key={actionIndex} style={{
+              borderTop: '1px solid #e5e7eb',
+              padding: '10px 16px',
+              textAlign: 'center',
+              color: '#06C755',
+              fontSize: '13px',
+              fontWeight: 600,
+            }}>
+              {action.label || '選択'}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function FlexPreview({ content, maxWidth }: { content: string; maxWidth?: number }) {
   try {
     const parsed = JSON.parse(content)
@@ -246,6 +293,13 @@ export default function FlexPreview({ content, maxWidth }: { content: string; ma
 
     if (parsed.type === 'bubble') {
       return <FlexBubble bubble={parsed} maxWidth={maxWidth} />
+    }
+
+    // LINE template messages are not Flex messages, but the chat history uses
+    // the same visual-preview surface. This also supports records incorrectly
+    // mirrored as `flex` before the message-type fix.
+    if (parsed.type === 'template' && parsed.template?.type === 'carousel' && Array.isArray(parsed.template.columns)) {
+      return <TemplateCarousel columns={parsed.template.columns} maxWidth={maxWidth} />
     }
 
     // Unknown type — fallback to text extraction
