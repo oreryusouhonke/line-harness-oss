@@ -266,6 +266,7 @@ describe('resolveScenarioDeliveryFriend', () => {
     id: 'f-source',
     line_user_id: 'U-source',
     display_name: 'Source',
+    management_nickname: null,
     picture_url: null,
     status_message: null,
     is_following: 1,

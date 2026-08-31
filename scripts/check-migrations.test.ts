@@ -136,6 +136,10 @@ describe('findDuplicateMigrationPrefixViolations', () => {
       '041_account_og_defaults.sql',
       '041_event_custom_messages.sql',
       '041_update_history.sql',
+      '046_affiliate_links.sql',
+      '046_link_tracking_controls.sql',
+      '051_booking_recurring_availability_google_calendar.sql',
+      '051_webinars.sql',
     ])).toEqual([]);
   });
 
