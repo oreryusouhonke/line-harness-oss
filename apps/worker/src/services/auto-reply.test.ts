@@ -36,6 +36,7 @@ const friend: Friend = {
   id: 'friend-1',
   line_user_id: 'U123',
   display_name: 'テストユーザー',
+  management_nickname: null,
   picture_url: null,
   status_message: null,
   is_following: 1,
