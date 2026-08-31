@@ -11,6 +11,10 @@ import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
 import ImageUploader, { type ImageUploaderValue } from '@/components/shared/image-uploader'
 import { isIemotoBotActive, isImportedLineHistory } from './chat-mode'
 
+const CHAT_COLUMN_WIDTHS_KEY = 'line-harness:chat-column-widths'
+const DEFAULT_CHAT_LIST_WIDTH = 288
+const DEFAULT_CHAT_INFO_WIDTH = 320
+
 interface Chat {
   id: string
   friendId: string
@@ -405,6 +409,63 @@ export default function ChatsPage() {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const composerInteractionRef = useRef<HTMLDivElement>(null)
+  const columnsRef = useRef<HTMLDivElement>(null)
+  const [chatListWidth, setChatListWidth] = useState(DEFAULT_CHAT_LIST_WIDTH)
+  const [chatInfoWidth, setChatInfoWidth] = useState(DEFAULT_CHAT_INFO_WIDTH)
+  const [resizingColumn, setResizingColumn] = useState<'list' | 'info' | null>(null)
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CHAT_COLUMN_WIDTHS_KEY) ?? '{}') as {
+        list?: number
+        info?: number
+      }
+      if (Number.isFinite(saved.list)) setChatListWidth(Math.max(220, Math.min(480, saved.list!)))
+      if (Number.isFinite(saved.info)) setChatInfoWidth(Math.max(260, Math.min(520, saved.info!)))
+    } catch {
+      // localStorage unavailable or invalid — defaults remain active.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!resizingColumn) return
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const bounds = columnsRef.current?.getBoundingClientRect()
+      if (!bounds) return
+      const minimumChatWidth = 360
+
+      if (resizingColumn === 'list') {
+        const maximum = Math.max(220, bounds.width - chatInfoWidth - minimumChatWidth - 24)
+        setChatListWidth(Math.max(220, Math.min(480, maximum, event.clientX - bounds.left)))
+      } else {
+        const maximum = Math.max(260, bounds.width - chatListWidth - minimumChatWidth - 24)
+        setChatInfoWidth(Math.max(260, Math.min(520, maximum, bounds.right - event.clientX)))
+      }
+    }
+
+    const handlePointerUp = () => setResizingColumn(null)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp, { once: true })
+
+    return () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [chatInfoWidth, chatListWidth, resizingColumn])
+
+  useEffect(() => {
+    if (resizingColumn) return
+    try {
+      localStorage.setItem(CHAT_COLUMN_WIDTHS_KEY, JSON.stringify({ list: chatListWidth, info: chatInfoWidth }))
+    } catch {
+      // localStorage unavailable
+    }
+  }, [chatInfoWidth, chatListWidth, resizingColumn])
 
   const buildListParams = useCallback((cursor: { at: string; id: string } | null) => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
@@ -915,9 +976,16 @@ export default function ChatsPage() {
         </div>
       )}
 
-      <div className="flex gap-3 h-[calc(100vh-84px)] lg:h-[calc(100vh-90px)]">
+      <div
+        ref={columnsRef}
+        className="flex gap-3 lg:gap-0 h-[calc(100vh-84px)] lg:h-[calc(100vh-90px)]"
+        style={{
+          '--chat-list-width': `${chatListWidth}px`,
+          '--chat-info-width': `${chatInfoWidth}px`,
+        } as React.CSSProperties}
+      >
         {/* Left Panel: Chat List */}
-        <div className={`w-full lg:w-72 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
+        <div className={`w-full lg:w-[var(--chat-list-width)] lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           {/* Filter row */}
           <div className="px-2 py-2 border-b border-gray-100 flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
             {([
@@ -1077,6 +1145,21 @@ export default function ChatsPage() {
               </>
             )}
           </div>
+        </div>
+
+        <div
+          role="separator"
+          aria-label="チャット一覧の幅を変更"
+          aria-orientation="vertical"
+          onPointerDown={(event) => {
+            event.preventDefault()
+            setResizingColumn('list')
+          }}
+          onDoubleClick={() => setChatListWidth(DEFAULT_CHAT_LIST_WIDTH)}
+          className="group hidden w-3 flex-shrink-0 cursor-col-resize items-center justify-center lg:flex"
+          title="ドラッグで幅を変更・ダブルクリックで初期値に戻す"
+        >
+          <span className={`h-14 w-1 rounded-full transition-colors ${resizingColumn === 'list' ? 'bg-green-500' : 'bg-gray-200 group-hover:bg-green-400'}`} />
         </div>
 
         {/* Right Panel: Chat Detail */}
@@ -1384,6 +1467,23 @@ export default function ChatsPage() {
           ) : null}
         </div>
 
+        {(selectedChatId || selectedFriendId) && (
+          <div
+            role="separator"
+            aria-label="友だち詳細の幅を変更"
+            aria-orientation="vertical"
+            onPointerDown={(event) => {
+              event.preventDefault()
+              setResizingColumn('info')
+            }}
+            onDoubleClick={() => setChatInfoWidth(DEFAULT_CHAT_INFO_WIDTH)}
+            className="group hidden w-3 flex-shrink-0 cursor-col-resize items-center justify-center xl:flex"
+            title="ドラッグで幅を変更・ダブルクリックで初期値に戻す"
+          >
+            <span className={`h-14 w-1 rounded-full transition-colors ${resizingColumn === 'info' ? 'bg-green-500' : 'bg-gray-200 group-hover:bg-green-400'}`} />
+          </div>
+        )}
+
         {/* Right-most Panel: 友だち詳細サイドバー — chat detail を開いている時のみ表示 */}
         {/*
           friendId は **現在の selection** を優先する。chatDetail の load 中は前の chat
@@ -1392,7 +1492,7 @@ export default function ChatsPage() {
           直接渡せる (chat list SQL が `id: f.id` で friend_id を返す)。
         */}
         {(selectedChatId || selectedFriendId) && (
-          <div className="hidden xl:flex w-80 flex-shrink-0 flex-col gap-3 min-h-0">
+          <div className="hidden xl:flex w-[var(--chat-info-width)] flex-shrink-0 flex-col gap-3 min-h-0">
             {selectedChatId && chatDetail && (
               <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm space-y-3">
                 <div>
