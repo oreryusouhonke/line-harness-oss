@@ -968,7 +968,10 @@ export const api = {
       ),
   },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string }) => {
+    list: (
+      params?: { status?: string; operatorId?: string; accountId?: string; unansweredOnly?: boolean; limit?: number; beforeAt?: string; beforeId?: string },
+      requestOptions?: Pick<RequestInit, 'signal' | 'cache'>,
+    ) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
       if (params?.operatorId) query.operatorId = params.operatorId
@@ -980,11 +983,13 @@ export const api = {
       if (params?.beforeId) query.beforeId = params.beforeId
       return fetchApi<ApiResponse<Chat[]>>(
         '/api/chats?' + new URLSearchParams(query),
+        requestOptions,
       )
     },
-    get: (id: string) =>
+    get: (id: string, requestOptions?: Pick<RequestInit, 'signal' | 'cache'>) =>
       fetchApi<ApiResponse<Chat & { messages?: { id: string; content: string; senderType: string; createdAt: string }[] }>>(
         `/api/chats/${id}`,
+        requestOptions,
       ),
     create: (data: { friendId: string; operatorId?: string | null }) =>
       fetchApi<ApiResponse<Chat>>('/api/chats', {
